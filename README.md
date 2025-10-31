@@ -12,22 +12,54 @@ Tree-shaking enables developers to depend on large, well-designed libraries whil
 
 Tree-shaking is the process of analyzing code to identify and remove unused exports from Python modules. This project provides a Rust-based implementation that can be used from Python to detect dead code and optimize module sizes.
 
+## Usage
+
+### CLI
+```bash
+# Analyze a virtual environment
+./target/debug/tsrs-cli analyze /path/to/venv
+
+# Create a slim venv from Python code and venv
+./target/debug/tsrs-cli slim <python-directory> <venv-location>
+
+# Create slim venv with custom output path
+./target/debug/tsrs-cli slim <python-directory> <venv-location> -o /path/to/output/.venv-slim
+```
+
+### How it Works
+
+1. **Scans the Python code directory** for all import statements
+2. **Analyzes the source venv** to discover all installed packages
+3. **Maps imports to packages** and copies only the used packages to a new slim venv
+4. **Creates `.venv-slim`** with only the minimal dependencies needed
+
+### Example
+```bash
+# Slim your venv based on actual code usage
+tsrs-cli slim ./src ./.venv
+# Creates: ./.venv-slim with only the packages your code imports
+```
+
 ## Building
 
-This project uses Rust with PyO3 to create Python bindings.
+### CLI Only
+```bash
+cargo build --release --bin tsrs-cli
+./target/release/tsrs-cli --help
+```
 
-### Requirements
-- Rust 1.56+
-- Python 3.7+
-- maturin (for building Python wheels)
+### With Python Extension
+This project can also build as a Python extension module using PyO3.
 
 ```bash
-# Build the Rust extension
-cargo build --release
-
-# Or build a Python wheel
+# Setup (optional Python feature)
 pip install maturin
+
+# Build and develop
 maturin develop
+
+# Or build a wheel
+maturin build --release
 ```
 
 ## Development

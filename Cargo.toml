@@ -6,8 +6,26 @@ description = "Tree-shaking in Rust for Python"
 authors = ["George Pearse"]
 
 [dependencies]
-pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3 = { version = "0.22", optional = true }
+rustpython-parser = "0.3"
+walkdir = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
 
 [lib]
 name = "tsrs"
-crate-type = ["cdylib"]
+crate-type = ["rlib"]
+
+[[bin]]
+name = "tsrs-cli"
+path = "src/bin/cli.rs"
+
+[features]
+default = []
+python-extension = ["pyo3", "pyo3?/extension-module"]
