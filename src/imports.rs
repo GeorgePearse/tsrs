@@ -145,10 +145,7 @@ impl ImportCollector {
     }
 
     fn handle_import_from(&mut self, import_from: &ast::StmtImportFrom) {
-        let level = import_from
-            .level
-            .as_ref()
-            .map_or(0, ast::Int::to_u32);
+        let level = import_from.level.as_ref().map_or(0, ast::Int::to_u32);
 
         if level > 0 {
             // Relative imports refer to the current package; skip to avoid

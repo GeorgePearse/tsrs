@@ -18,6 +18,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 globset = "0.4"
 regex = "1"
+rayon = "1"
+num_cpus = "1"
 
 [lib]
 name = "tsrs"

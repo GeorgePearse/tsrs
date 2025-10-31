@@ -50,11 +50,7 @@ impl Minifier {
     /// # Errors
     ///
     /// Returns an error if the source cannot be parsed.
-    pub fn rewrite_with_plan(
-        module_name: &str,
-        source: &str,
-        plan: &MinifyPlan,
-    ) -> Result<String> {
+    pub fn rewrite_with_plan(module_name: &str, source: &str, plan: &MinifyPlan) -> Result<String> {
         let mut plan_map: HashMap<String, FunctionPlan> = HashMap::new();
 
         for function_plan in &plan.functions {
@@ -115,7 +111,7 @@ pub struct RenameEntry {
 }
 
 /// Location of a function in the original source using byte offsets.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FunctionRange {
     pub start: usize,
     pub end: usize,
@@ -137,7 +133,10 @@ impl Planner {
     fn finish(self) -> MinifyPlan {
         MinifyPlan {
             module: self.module,
-            keywords: PYTHON_KEYWORDS.iter().map(std::string::ToString::to_string).collect(),
+            keywords: PYTHON_KEYWORDS
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             functions: self.functions,
         }
     }
@@ -428,7 +427,10 @@ fn collect_declared_names(body: &[ast::Stmt]) -> (HashSet<String>, HashSet<Strin
 }
 
 fn default_reserved() -> HashSet<String> {
-    let mut reserved: HashSet<String> = PYTHON_KEYWORDS.iter().map(std::string::ToString::to_string).collect();
+    let mut reserved: HashSet<String> = PYTHON_KEYWORDS
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     for ident in RESERVED_IDENTIFIERS {
         reserved.insert((*ident).to_string());
     }
@@ -1361,11 +1363,9 @@ impl<'a> OccurrenceCollector<'a> {
         match stmt {
             ast::Stmt::FunctionDef(func) => {
                 let range = range_from_node(func);
-                if let Some((start, end)) = find_identifier_in_range(
-                    self.source,
-                    &range,
-                    func.name.as_ref(),
-                ) {
+                if let Some((start, end)) =
+                    find_identifier_in_range(self.source, &range, func.name.as_ref())
+                {
                     let name_range = FunctionRange { start, end };
                     self.record_identifier(func.name.as_ref(), name_range);
                 } else {
@@ -1375,11 +1375,9 @@ impl<'a> OccurrenceCollector<'a> {
             }
             ast::Stmt::AsyncFunctionDef(func) => {
                 let range = range_from_node(func);
-                if let Some((start, end)) = find_identifier_in_range(
-                    self.source,
-                    &range,
-                    func.name.as_ref(),
-                ) {
+                if let Some((start, end)) =
+                    find_identifier_in_range(self.source, &range, func.name.as_ref())
+                {
                     let name_range = FunctionRange { start, end };
                     self.record_identifier(func.name.as_ref(), name_range);
                 } else {
@@ -1388,11 +1386,9 @@ impl<'a> OccurrenceCollector<'a> {
             }
             ast::Stmt::ClassDef(class_def) => {
                 let range = range_from_node(class_def);
-                if let Some((start, end)) = find_identifier_in_range(
-                    self.source,
-                    &range,
-                    class_def.name.as_ref(),
-                ) {
+                if let Some((start, end)) =
+                    find_identifier_in_range(self.source, &range, class_def.name.as_ref())
+                {
                     let name_range = FunctionRange { start, end };
                     self.record_identifier(class_def.name.as_ref(), name_range);
                 } else {
@@ -1515,17 +1511,16 @@ impl<'a> OccurrenceCollector<'a> {
         match stmt {
             ast::Stmt::Import(import_stmt) => {
                 for alias in &import_stmt.names {
-                    let binding = alias
-                        .asname
-                        .as_ref()
-                        .map(std::string::ToString::to_string)
-                        .unwrap_or_else(|| {
+                    let binding = alias.asname.as_ref().map_or_else(
+                        || {
                             let full = alias.name.to_string();
                             full.split('.')
                                 .next()
                                 .map(std::string::ToString::to_string)
                                 .unwrap_or(full)
-                        });
+                        },
+                        std::string::ToString::to_string,
+                    );
 
                     if let Some(new_name) = self.renames.get(binding.as_str()) {
                         if binding != *new_name {
@@ -1558,17 +1553,16 @@ impl<'a> OccurrenceCollector<'a> {
             }
             ast::Stmt::ImportFrom(import_from) => {
                 for alias in &import_from.names {
-                    let binding = alias
-                        .asname
-                        .as_ref()
-                        .map(std::string::ToString::to_string)
-                        .unwrap_or_else(|| {
+                    let binding = alias.asname.as_ref().map_or_else(
+                        || {
                             let full = alias.name.to_string();
                             full.split('.')
                                 .next()
                                 .map(std::string::ToString::to_string)
                                 .unwrap_or(full)
-                        });
+                        },
+                        std::string::ToString::to_string,
+                    );
 
                     if let Some(new_name) = self.renames.get(binding.as_str()) {
                         if binding != *new_name {
@@ -1621,6 +1615,7 @@ impl<'a> OccurrenceCollector<'a> {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn visit_expr(&mut self, expr: &ast::Expr) {
         if self.abort {
             return;
@@ -1667,10 +1662,8 @@ impl<'a> OccurrenceCollector<'a> {
                 }
             }
             ast::Expr::Dict(expr_dict) => {
-                for key in &expr_dict.keys {
-                    if let Some(key) = key {
-                        self.visit_expr(key);
-                    }
+                for key in expr_dict.keys.iter().flatten() {
+                    self.visit_expr(key);
                 }
                 for value in &expr_dict.values {
                     self.visit_expr(value);
@@ -1849,7 +1842,7 @@ fn find_identifier_in_range(
     let mut offset = 0usize;
     while let Some(rel_idx) = slice[offset..].find(name) {
         let idx = offset + rel_idx;
-        let before = slice[..idx].chars().rev().next();
+        let before = slice[..idx].chars().next_back();
         let after = slice[idx + name.len()..].chars().next();
         if is_identifier_boundary(before, after) {
             return Some((start + idx, start + idx + name.len()));
@@ -1878,7 +1871,7 @@ fn find_except_name_range(
         let prefix = slice[..idx].trim_end();
         if prefix.ends_with("as")
             && is_identifier_boundary(
-                slice[..idx].chars().rev().next(),
+                slice[..idx].chars().next_back(),
                 slice[idx + name.len()..].chars().next(),
             )
         {
@@ -1891,8 +1884,8 @@ fn find_except_name_range(
 }
 
 fn is_identifier_boundary(prev: Option<char>, next: Option<char>) -> bool {
-    let prev_ok = prev.map_or(true, |c| !is_identifier_char(c));
-    let next_ok = next.map_or(true, |c| !is_identifier_char(c));
+    let prev_ok = !prev.is_some_and(is_identifier_char);
+    let next_ok = !next.is_some_and(is_identifier_char);
     prev_ok && next_ok
 }
 

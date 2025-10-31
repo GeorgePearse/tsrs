@@ -1,4 +1,18 @@
 //! CLI for tree-shaking operations
+#![allow(
+    clippy::too_many_lines,
+    clippy::similar_names,
+    clippy::uninlined_format_args,
+    clippy::map_unwrap_or,
+    clippy::redundant_closure_for_method_calls,
+    clippy::ptr_arg,
+    clippy::manual_let_else,
+    clippy::field_reassign_with_default,
+    clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
+    clippy::explicit_iter_loop,
+    clippy::single_match_else,
+)]
 
 use clap::{Parser, Subcommand};
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -8,6 +22,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process;
 use tracing_subscriber::filter::EnvFilter;
 use tsrs::{Minifier, MinifyPlan, VenvAnalyzer, VenvSlimmer};
 use walkdir::WalkDir;
@@ -99,6 +114,18 @@ enum Commands {
         /// Emit rename statistics in JSON format (requires --stats)
         #[arg(long)]
         json: bool,
+
+        /// Exit with a non-zero status if any bailouts occur
+        #[arg(long)]
+        fail_on_bailout: bool,
+
+        /// Exit with a non-zero status if any errors occur
+        #[arg(long)]
+        fail_on_error: bool,
+
+        /// Exit with a non-zero status if any changes are made
+        #[arg(long)]
+        fail_on_change: bool,
     },
 
     /// Apply precomputed rename plans to every file in a directory tree
@@ -142,6 +169,18 @@ enum Commands {
         /// Emit stats summary as JSON (requires --stats)
         #[arg(long)]
         json: bool,
+
+        /// Exit with a non-zero status if any bailouts occur
+        #[arg(long)]
+        fail_on_bailout: bool,
+
+        /// Exit with a non-zero status if any errors occur
+        #[arg(long)]
+        fail_on_error: bool,
+
+        /// Exit with a non-zero status if any changes are made
+        #[arg(long)]
+        fail_on_change: bool,
     },
 
     /// Rewrite a Python file using safe local renames
@@ -165,6 +204,18 @@ enum Commands {
         /// Emit rename statistics in JSON format (requires --stats)
         #[arg(long)]
         json: bool,
+
+        /// Exit with a non-zero status if any bailouts occur
+        #[arg(long)]
+        fail_on_bailout: bool,
+
+        /// Exit with a non-zero status if any errors occur
+        #[arg(long)]
+        fail_on_error: bool,
+
+        /// Exit with a non-zero status if any changes are made
+        #[arg(long)]
+        fail_on_change: bool,
     },
 
     /// Rewrite all Python files in a directory tree using safe local renames
@@ -204,6 +255,18 @@ enum Commands {
         /// Emit stats summary as JSON (requires --stats)
         #[arg(long)]
         json: bool,
+
+        /// Exit with a non-zero status if any bailouts occur
+        #[arg(long)]
+        fail_on_bailout: bool,
+
+        /// Exit with a non-zero status if any errors occur
+        #[arg(long)]
+        fail_on_error: bool,
+
+        /// Exit with a non-zero status if any changes are made
+        #[arg(long)]
+        fail_on_change: bool,
     },
 }
 
@@ -247,14 +310,30 @@ fn main() -> anyhow::Result<()> {
             backup_ext,
             stats,
             json,
+            fail_on_bailout,
+            fail_on_error,
+            fail_on_change,
         } => {
-            minify(
+            let stats_result = minify(
                 &python_file,
                 in_place,
                 backup_ext.as_deref(),
                 stats,
                 json,
+                fail_on_bailout,
+                fail_on_error,
+                fail_on_change,
             )?;
+
+            if fail_on_bailout || fail_on_error || fail_on_change {
+                let code = compute_exit_code(
+                    &stats_result,
+                    fail_on_bailout,
+                    fail_on_error,
+                    fail_on_change,
+                );
+                process::exit(code);
+            }
         }
         Commands::ApplyPlan {
             python_file,
@@ -263,15 +342,31 @@ fn main() -> anyhow::Result<()> {
             backup_ext,
             stats,
             json,
+            fail_on_bailout,
+            fail_on_error,
+            fail_on_change,
         } => {
-            apply_plan(
+            let stats_result = apply_plan(
                 &python_file,
                 &plan,
                 in_place,
                 backup_ext.as_deref(),
                 stats,
                 json,
+                fail_on_bailout,
+                fail_on_error,
+                fail_on_change,
             )?;
+
+            if fail_on_bailout || fail_on_error || fail_on_change {
+                let code = compute_exit_code(
+                    &stats_result,
+                    fail_on_bailout,
+                    fail_on_error,
+                    fail_on_change,
+                );
+                process::exit(code);
+            }
         }
         Commands::MinifyDir {
             input_dir,
@@ -283,8 +378,11 @@ fn main() -> anyhow::Result<()> {
             exclude,
             stats,
             json,
+            fail_on_bailout,
+            fail_on_error,
+            fail_on_change,
         } => {
-            minify_dir(
+            let stats_result = minify_dir(
                 &input_dir,
                 out_dir,
                 &include,
@@ -295,7 +393,20 @@ fn main() -> anyhow::Result<()> {
                 cli.debug,
                 stats,
                 json,
+                fail_on_bailout,
+                fail_on_error,
+                fail_on_change,
             )?;
+
+            if fail_on_bailout || fail_on_error || fail_on_change {
+                let code = compute_exit_code(
+                    &stats_result,
+                    fail_on_bailout,
+                    fail_on_error,
+                    fail_on_change,
+                );
+                process::exit(code);
+            }
         }
         Commands::ApplyPlanDir {
             input_dir,
@@ -308,8 +419,11 @@ fn main() -> anyhow::Result<()> {
             exclude,
             stats,
             json,
+            fail_on_bailout,
+            fail_on_error,
+            fail_on_change,
         } => {
-            apply_plan_dir(
+            let stats_result = apply_plan_dir(
                 &input_dir,
                 &plan,
                 out_dir,
@@ -321,7 +435,20 @@ fn main() -> anyhow::Result<()> {
                 cli.debug,
                 stats,
                 json,
+                fail_on_bailout,
+                fail_on_error,
+                fail_on_change,
             )?;
+
+            if fail_on_bailout || fail_on_error || fail_on_change {
+                let code = compute_exit_code(
+                    &stats_result,
+                    fail_on_bailout,
+                    fail_on_error,
+                    fail_on_change,
+                );
+                process::exit(code);
+            }
         }
     }
 
@@ -398,8 +525,20 @@ fn minify(
     backup_ext: Option<&str>,
     show_stats: bool,
     json_output: bool,
-) -> anyhow::Result<()> {
-    minify_file(file_path, in_place, backup_ext, show_stats, json_output)
+    fail_on_bailout: bool,
+    fail_on_error: bool,
+    fail_on_change: bool,
+) -> anyhow::Result<DirStats> {
+    minify_file(
+        file_path,
+        in_place,
+        backup_ext,
+        show_stats,
+        json_output,
+        fail_on_bailout,
+        fail_on_error,
+        fail_on_change,
+    )
 }
 
 fn apply_plan(
@@ -409,7 +548,10 @@ fn apply_plan(
     backup_ext: Option<&str>,
     show_stats: bool,
     json_output: bool,
-) -> anyhow::Result<()> {
+    fail_on_bailout: bool,
+    fail_on_error: bool,
+    fail_on_change: bool,
+) -> anyhow::Result<DirStats> {
     if json_output && !show_stats {
         anyhow::bail!("--json requires --stats");
     }
@@ -417,7 +559,17 @@ fn apply_plan(
     let plan_file = fs::read_to_string(plan_path)?;
     let plan: MinifyPlan = serde_json::from_str(&plan_file)?;
 
-    apply_plan_to_file(file_path, &plan, in_place, backup_ext, show_stats, json_output)
+    apply_plan_to_file(
+        file_path,
+        &plan,
+        in_place,
+        backup_ext,
+        show_stats,
+        json_output,
+        fail_on_bailout,
+        fail_on_error,
+        fail_on_change,
+    )
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -439,6 +591,93 @@ struct FileStats {
     status: String,
 }
 
+fn print_file_status(path: &str, status: &str, renames: usize, show_stats: bool) {
+    if show_stats {
+        println!("• {} → {} (renames: {})", path, status, renames);
+    } else {
+        println!("• {} → {}", path, status);
+    }
+}
+
+fn print_summary(
+    stats: &DirStats,
+    show_stats: bool,
+    json_output: bool,
+    dry_run: bool,
+    output_label: &str,
+) -> anyhow::Result<()> {
+    if dry_run {
+        if show_stats {
+            println!(
+                "Dry run complete: {} files matched → {} minified, {} skipped, {} bailouts, {} errors, {} renames. Output: {}",
+                stats.processed,
+                stats.rewritten,
+                stats.skipped_no_change,
+                stats.bailouts,
+                stats.errors,
+                stats.total_renames,
+                output_label,
+            );
+        } else {
+            println!(
+                "Dry run complete: {} files matched → {} minified, {} skipped, {} bailouts, {} errors. Output: {}",
+                stats.processed,
+                stats.rewritten,
+                stats.skipped_no_change,
+                stats.bailouts,
+                stats.errors,
+                output_label,
+            );
+        }
+    } else if show_stats {
+        println!(
+            "Processed {} files → {} minified, {} skipped, {} bailouts, {} errors, {} renames. Output: {}",
+            stats.processed,
+            stats.rewritten,
+            stats.skipped_no_change,
+            stats.bailouts,
+            stats.errors,
+            stats.total_renames,
+            output_label,
+        );
+    } else {
+        println!(
+            "Processed {} files → {} minified, {} skipped, {} bailouts, {} errors. Output: {}",
+            stats.processed,
+            stats.rewritten,
+            stats.skipped_no_change,
+            stats.bailouts,
+            stats.errors,
+            output_label,
+        );
+    }
+
+    if show_stats && json_output {
+        println!("{}", serde_json::to_string_pretty(stats)?);
+    }
+
+    Ok(())
+}
+
+fn compute_exit_code(
+    stats: &DirStats,
+    fail_on_bailout: bool,
+    fail_on_error: bool,
+    fail_on_change: bool,
+) -> i32 {
+    let mut code = 0;
+    if fail_on_error && stats.errors > 0 {
+        code |= 1;
+    }
+    if fail_on_bailout && stats.bailouts > 0 {
+        code |= 2;
+    }
+    if fail_on_change && stats.rewritten > 0 {
+        code |= 4;
+    }
+    code
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct PlanBundle {
     files: Vec<PlanFile>,
@@ -456,7 +695,14 @@ fn minify_file(
     backup_ext: Option<&str>,
     show_stats: bool,
     json_output: bool,
-) -> anyhow::Result<()> {
+    fail_on_bailout: bool,
+    fail_on_error: bool,
+    fail_on_change: bool,
+) -> anyhow::Result<DirStats> {
+    if json_output && !show_stats {
+        anyhow::bail!("--json requires --stats");
+    }
+
     let source = fs::read_to_string(file_path)?;
     let module_name = file_path
         .file_stem()
@@ -465,7 +711,17 @@ fn minify_file(
         .unwrap_or_else(|| file_path.to_string_lossy().to_string());
 
     let plan = Minifier::plan_from_source(&module_name, &source)?;
-    apply_plan_to_file(file_path, &plan, in_place, backup_ext, show_stats, json_output)
+    apply_plan_to_file(
+        file_path,
+        &plan,
+        in_place,
+        backup_ext,
+        show_stats,
+        json_output,
+        fail_on_bailout,
+        fail_on_error,
+        fail_on_change,
+    )
 }
 
 fn apply_plan_to_file(
@@ -475,7 +731,10 @@ fn apply_plan_to_file(
     backup_ext: Option<&str>,
     show_stats: bool,
     json_output: bool,
-) -> anyhow::Result<()> {
+    fail_on_bailout: bool,
+    fail_on_error: bool,
+    fail_on_change: bool,
+) -> anyhow::Result<DirStats> {
     if json_output && !show_stats {
         anyhow::bail!("--json requires --stats");
     }
@@ -492,18 +751,11 @@ fn apply_plan_to_file(
         .unwrap_or_else(|| file_path.to_string_lossy().to_string());
 
     let rename_total: usize = plan.functions.iter().map(|f| f.renames.len()).sum();
-    let has_nested = plan
-        .functions
-        .iter()
-        .any(|f| f.has_nested_functions);
 
     let mut status;
     let mut final_content: Cow<'_, str> = Cow::Borrowed(&source);
-    let mut rewrote = false;
 
-    if has_nested {
-        status = "skipped (nested scopes)".to_string();
-    } else if rename_total == 0 {
+    if rename_total == 0 {
         status = "skipped (no renames)".to_string();
     } else {
         let rewritten = Minifier::rewrite_with_plan(&module_name, &source, plan)?;
@@ -512,86 +764,70 @@ fn apply_plan_to_file(
         } else {
             status = "minified".to_string();
             final_content = Cow::Owned(rewritten);
-            rewrote = true;
         }
     }
 
     let display_path = file_path.display().to_string();
 
-    if in_place && rewrote {
+    if in_place {
         if let Some(ext) = backup_ext {
             let mut backup_os = file_path.as_os_str().to_os_string();
             backup_os.push(ext);
             let backup_path = PathBuf::from(backup_os);
             if backup_path.exists() {
                 status = "skipped (backup exists)".to_string();
-                rewrote = false;
                 final_content = Cow::Borrowed(&source);
             } else {
                 fs::write(&backup_path, &source)?;
             }
         }
 
-        if rewrote {
-            if let Cow::Owned(ref content) = final_content {
-                fs::write(file_path, content)?;
-            }
+        if let Cow::Owned(ref content) = final_content {
+            fs::write(file_path, content)?;
         }
     }
 
-    let mut applied_renames = if rewrote { rename_total } else { 0 };
-
-    if status == "skipped (backup exists)" {
-        applied_renames = 0;
-    }
+    let applied_renames = if matches!(status.as_str(), "minified") {
+        rename_total
+    } else {
+        0
+    };
 
     if show_stats {
-        println!("• {} → {} (renames: {})", display_path, status, applied_renames);
+        print_file_status(&display_path, &status, applied_renames, true);
     } else if in_place {
-        println!("• {} → {}", display_path, status);
+        print_file_status(&display_path, &status, applied_renames, false);
     }
 
     if !in_place && !show_stats {
         println!("{}", final_content);
     }
 
-    if show_stats {
-        let mut stats = DirStats::default();
-        stats.processed = 1;
-        stats.total_renames = applied_renames;
-        match status.as_str() {
-            "minified" => stats.rewritten = 1,
-            "skipped (no renames)" => stats.skipped_no_change = 1,
-            _ => stats.bailouts = 1,
-        }
-        stats.files.push(FileStats {
-            path: display_path.clone(),
-            renames: applied_renames,
-            status: status.clone(),
-        });
+    let mut stats = DirStats::default();
+    stats.processed = 1;
+    stats.total_renames = applied_renames;
+    match status.as_str() {
+        "minified" => stats.rewritten = 1,
+        "skipped (no renames)" => stats.skipped_no_change = 1,
+        _ => stats.bailouts = 1,
+    }
+    stats.files.push(FileStats {
+        path: display_path.clone(),
+        renames: applied_renames,
+        status: status.clone(),
+    });
 
+    let summary_needed = show_stats || fail_on_bailout || fail_on_error || fail_on_change;
+    if summary_needed {
         let output_target = if in_place {
             display_path.clone()
         } else {
             "stdout".to_string()
         };
-
-        if json_output {
-            println!("{}", serde_json::to_string_pretty(&stats)?);
-        } else {
-            println!(
-                "Processed 1 file → {} minified, {} skipped, {} bailouts, {} errors, {} renames. Output: {}",
-                stats.rewritten,
-                stats.skipped_no_change,
-                stats.bailouts,
-                stats.errors,
-                stats.total_renames,
-                output_target,
-            );
-        }
+        print_summary(&stats, show_stats, json_output, false, &output_target)?;
     }
 
-    Ok(())
+    Ok(stats)
 }
 
 fn minify_plan_dir(
@@ -746,7 +982,10 @@ fn apply_plan_dir(
     debug: bool,
     show_stats: bool,
     json_output: bool,
-) -> anyhow::Result<()> {
+    fail_on_bailout: bool,
+    fail_on_error: bool,
+    fail_on_change: bool,
+) -> anyhow::Result<DirStats> {
     if json_output && !show_stats {
         anyhow::bail!("--json requires --stats");
     }
@@ -902,10 +1141,7 @@ fn apply_plan_dir(
         };
 
         let rename_total: usize = plan.functions.iter().map(|f| f.renames.len()).sum();
-        let has_nested = plan
-            .functions
-            .iter()
-            .any(|f| f.has_nested_functions);
+        let has_nested = plan.functions.iter().any(|f| f.has_nested_functions);
 
         let mut status;
         let mut final_content: Cow<'_, str> = Cow::Borrowed(&source);
@@ -1016,74 +1252,18 @@ fn apply_plan_dir(
         }
     }
 
-    if dry_run {
-        if show_stats {
-            println!(
-                "Dry run complete: {} files matched → {} minified, {} skipped, {} bailouts, {} errors, {} renames. Output: {}",
-                stats.processed,
-                stats.rewritten,
-                stats.skipped_no_change,
-                stats.bailouts,
-                stats.errors,
-                stats.total_renames,
-                if in_place {
-                    input_dir.display().to_string()
-                } else {
-                    resolved_out_dir.display().to_string()
-                }
-            );
+    let summary_needed =
+        show_stats || fail_on_bailout || fail_on_error || fail_on_change;
+    if summary_needed {
+        let output_label = if in_place {
+            input_dir.display().to_string()
         } else {
-            println!(
-                "Dry run complete: {} files matched → {} minified, {} skipped, {} bailouts, {} errors. Output: {}",
-                stats.processed,
-                stats.rewritten,
-                stats.skipped_no_change,
-                stats.bailouts,
-                stats.errors,
-                if in_place {
-                    input_dir.display().to_string()
-                } else {
-                    resolved_out_dir.display().to_string()
-                }
-            );
-        }
-    } else if show_stats {
-        println!(
-            "Processed {} files → {} minified, {} skipped, {} bailouts, {} errors, {} renames. Output: {}",
-            stats.processed,
-            stats.rewritten,
-            stats.skipped_no_change,
-            stats.bailouts,
-            stats.errors,
-            stats.total_renames,
-            if in_place {
-                input_dir.display().to_string()
-            } else {
-                resolved_out_dir.display().to_string()
-            }
-        );
-    } else {
-        println!(
-            "Processed {} files → {} minified, {} skipped, {} bailouts, {} errors. Output: {}",
-            stats.processed,
-            stats.rewritten,
-            stats.skipped_no_change,
-            stats.bailouts,
-            stats.errors,
-            if in_place {
-                input_dir.display().to_string()
-            } else {
-                resolved_out_dir.display().to_string()
-            }
-        );
+            resolved_out_dir.display().to_string()
+        };
+        print_summary(&stats, show_stats, json_output, dry_run, &output_label)?;
     }
 
-    if show_stats && json_output {
-        let json = serde_json::to_string_pretty(&stats)?;
-        println!("{}", json);
-    }
-
-    Ok(())
+    Ok(stats)
 }
 
 fn minify_dir(
@@ -1097,7 +1277,10 @@ fn minify_dir(
     debug: bool,
     show_stats: bool,
     json_output: bool,
-) -> anyhow::Result<()> {
+    fail_on_bailout: bool,
+    fail_on_error: bool,
+    fail_on_change: bool,
+) -> anyhow::Result<DirStats> {
     let input_dir = input_dir.canonicalize()?;
     if !input_dir.is_dir() {
         anyhow::bail!("Input '{}' is not a directory", input_dir.display());
@@ -1242,10 +1425,7 @@ fn minify_dir(
         };
 
         let rename_total: usize = plan.functions.iter().map(|f| f.renames.len()).sum();
-        let has_nested = plan
-            .functions
-            .iter()
-            .any(|f| f.has_nested_functions);
+        let has_nested = plan.functions.iter().any(|f| f.has_nested_functions);
 
         let mut status;
         let mut final_content: Cow<'_, str>;
@@ -1378,74 +1558,18 @@ fn minify_dir(
         }
     }
 
-    if dry_run {
-        if show_stats {
-            println!(
-                "Dry run complete: {} files matched → {} minified, {} skipped, {} bailouts, {} errors, {} renames. Output: {}",
-                stats.processed,
-                stats.rewritten,
-                stats.skipped_no_change,
-                stats.bailouts,
-                stats.errors,
-                stats.total_renames,
-                if in_place {
-                    input_dir.display().to_string()
-                } else {
-                    resolved_out_dir.display().to_string()
-                }
-            );
+    let summary_needed =
+        show_stats || fail_on_bailout || fail_on_error || fail_on_change;
+    if summary_needed {
+        let output_label = if in_place {
+            input_dir.display().to_string()
         } else {
-            println!(
-                "Dry run complete: {} files matched → {} minified, {} skipped, {} bailouts, {} errors. Output: {}",
-                stats.processed,
-                stats.rewritten,
-                stats.skipped_no_change,
-                stats.bailouts,
-                stats.errors,
-                if in_place {
-                    input_dir.display().to_string()
-                } else {
-                    resolved_out_dir.display().to_string()
-                }
-            );
-        }
-    } else if show_stats {
-        println!(
-            "Processed {} files → {} minified, {} skipped, {} bailouts, {} errors, {} renames. Output: {}",
-            stats.processed,
-            stats.rewritten,
-            stats.skipped_no_change,
-            stats.bailouts,
-            stats.errors,
-            stats.total_renames,
-            if in_place {
-                input_dir.display().to_string()
-            } else {
-                resolved_out_dir.display().to_string()
-            }
-        );
-    } else {
-        println!(
-            "Processed {} files → {} minified, {} skipped, {} bailouts, {} errors. Output: {}",
-            stats.processed,
-            stats.rewritten,
-            stats.skipped_no_change,
-            stats.bailouts,
-            stats.errors,
-            if in_place {
-                input_dir.display().to_string()
-            } else {
-                resolved_out_dir.display().to_string()
-            }
-        );
+            resolved_out_dir.display().to_string()
+        };
+        print_summary(&stats, show_stats, json_output, dry_run, &output_label)?;
     }
 
-    if show_stats && json_output {
-        let json = serde_json::to_string_pretty(&stats)?;
-        println!("{}", json);
-    }
-
-    Ok(())
+    Ok(stats)
 }
 
 fn default_output_dir(input_dir: &Path) -> PathBuf {
@@ -1525,12 +1649,15 @@ def sample(value):
         fs::write(nested.join("__init__.py"), "")?;
 
         let output_dir = tmp.path().join("output");
-        minify_dir(
+        let _stats = minify_dir(
             &input_dir,
             Some(output_dir.clone()),
             &[],
             &[],
             None,
+            false,
+            false,
+            false,
             false,
             false,
             false,
@@ -1563,12 +1690,15 @@ def sample(value):
         )?;
 
         let output_dir = tmp.path().join("out");
-        minify_dir(
+        let _stats = minify_dir(
             &input_dir,
             Some(output_dir.clone()),
             &["pkg_a/**".to_string()],
             &[],
             None,
+            false,
+            false,
+            false,
             false,
             false,
             false,
@@ -1592,7 +1722,7 @@ def sample(value):
         )?;
 
         let output_dir = tmp.path().join("out");
-        minify_dir(
+        let _stats = minify_dir(
             &input_dir,
             Some(output_dir.clone()),
             &[],
@@ -1602,6 +1732,9 @@ def sample(value):
             true,
             false,
             true,
+            false,
+            false,
+            false,
             false,
         )?;
 
@@ -1620,13 +1753,16 @@ def sample(value):
             "def foo(value):\n    temp = value + 1\n    return temp\n",
         )?;
 
-        minify_dir(
+        let _stats = minify_dir(
             &input_dir,
             None,
             &[],
             &[],
             None,
             true,
+            false,
+            false,
+            false,
             false,
             false,
             false,
@@ -1647,13 +1783,16 @@ def sample(value):
         let original = "def foo(value):\n    temp = value + 1\n    return temp\n";
         fs::write(&file_path, original)?;
 
-        minify_dir(
+        let _stats = minify_dir(
             &input_dir,
             None,
             &[],
             &[],
             Some(".bak"),
             true,
+            false,
+            false,
+            false,
             false,
             false,
             false,
@@ -1682,7 +1821,7 @@ def sample(value):
         )?;
 
         let output_dir = tmp.path().join("out");
-        minify_dir(
+        let _stats = minify_dir(
             &input_dir,
             Some(output_dir),
             &[],
@@ -1693,6 +1832,9 @@ def sample(value):
             false,
             true,
             true,
+            false,
+            false,
+            false,
         )?;
 
         Ok(())
@@ -1705,7 +1847,16 @@ def sample(value):
         let original = "def foo(value):\n    temp = value + 1\n    return temp\n";
         fs::write(&file_path, original)?;
 
-        minify_file(&file_path, true, Some(".bak"), false, false)?;
+        let _stats = minify_file(
+            &file_path,
+            true,
+            Some(".bak"),
+            false,
+            false,
+            false,
+            false,
+            false,
+        )?;
 
         let rewritten = fs::read_to_string(&file_path)?;
         assert!(rewritten.contains("def foo(a):"));
@@ -1727,7 +1878,7 @@ def sample(value):
             "def foo(value):\n    temp = value + 1\n    return temp\n",
         )?;
 
-        minify_file(&file_path, false, None, true, true)?;
+        let _stats = minify_file(&file_path, false, None, true, true, false, false, false)?;
 
         Ok(())
     }
@@ -1743,7 +1894,17 @@ def sample(value):
         let plan_path = tmp.path().join("plan.json");
         fs::write(&plan_path, serde_json::to_string(&plan)?)?;
 
-        apply_plan(&file_path, &plan_path, true, Some(".bak"), false, false)?;
+        let _stats = apply_plan(
+            &file_path,
+            &plan_path,
+            true,
+            Some(".bak"),
+            false,
+            false,
+            false,
+            false,
+            false,
+        )?;
 
         let rewritten = fs::read_to_string(&file_path)?;
         assert!(rewritten.contains("def foo(a):"));
@@ -1767,9 +1928,33 @@ def sample(value):
         let plan_path = tmp.path().join("plan.json");
         fs::write(&plan_path, serde_json::to_string(&plan)?)?;
 
-        apply_plan(&file_path, &plan_path, false, None, true, true)?;
+        let _stats = apply_plan(
+            &file_path, &plan_path, false, None, true, true, false, false, false,
+        )?;
 
         Ok(())
+    }
+
+    #[test]
+    fn compute_exit_code_flags() {
+        let mut stats = DirStats::default();
+        assert_eq!(compute_exit_code(&stats, false, false, false), 0);
+
+        stats.errors = 1;
+        assert_eq!(compute_exit_code(&stats, false, true, false), 1);
+
+        stats.errors = 0;
+        stats.bailouts = 2;
+        assert_eq!(compute_exit_code(&stats, true, false, false), 2);
+
+        stats.bailouts = 0;
+        stats.rewritten = 3;
+        assert_eq!(compute_exit_code(&stats, false, false, true), 4);
+
+        stats.errors = 1;
+        stats.bailouts = 1;
+        stats.rewritten = 1;
+        assert_eq!(compute_exit_code(&stats, true, true, true), 7);
     }
 
     #[test]
@@ -1796,13 +1981,16 @@ def sample(value):
         assert_eq!(plan_bundle.files.len(), 2);
 
         let output_dir = tmp.path().join("out");
-        apply_plan_dir(
+        let _stats = apply_plan_dir(
             &input_dir,
             &plan_path,
             Some(output_dir.clone()),
             &[],
             &[],
             None,
+            false,
+            false,
+            false,
             false,
             false,
             false,

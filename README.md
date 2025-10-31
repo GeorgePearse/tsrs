@@ -95,6 +95,9 @@ Add `--stats` to include per-file rename counts in the output, and combine it wi
 
 # Apply in place with backups and detailed stats
 ./target/debug/tsrs-cli apply-plan-dir ./src --plan plan.json --in-place --backup-ext .bak --stats --json
+
+# CI: fail if a rewrite would change files or introduce bailouts
+./target/debug/tsrs-cli minify-dir ./src --dry-run --fail-on-change --fail-on-bailout
 ```
 
 ## References

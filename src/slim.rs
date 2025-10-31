@@ -15,7 +15,11 @@ pub struct VenvSlimmer {
 }
 
 impl VenvSlimmer {
-    /// Create a new venv slimmer that analyzes code_directory and slims source_venv
+    /// Create a new venv slimmer that analyzes `code_directory` and slims `source_venv`
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either path does not exist.
     pub fn new<P: AsRef<Path>>(code_directory: P, source_venv: P) -> Result<Self> {
         let code_dir = code_directory.as_ref().to_path_buf();
         let source = source_venv.as_ref().to_path_buf();
@@ -37,8 +41,7 @@ impl VenvSlimmer {
         // Default output is .venv-slim next to the source venv
         let mut output = source
             .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         output.push(".venv-slim");
 
         Ok(VenvSlimmer {
@@ -49,6 +52,10 @@ impl VenvSlimmer {
     }
 
     /// Create a new venv slimmer with custom output path
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either path does not exist.
     pub fn new_with_output<P: AsRef<Path>>(
         code_directory: P,
         source_venv: P,
@@ -80,6 +87,10 @@ impl VenvSlimmer {
     }
 
     /// Create a slim venv by analyzing code imports and copying only used packages
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the analysis or copying fails.
     pub fn slim(&self) -> Result<()> {
         tracing::info!("Starting venv slimming");
         tracing::info!("  Code directory: {}", self.code_directory.display());
@@ -93,7 +104,7 @@ impl VenvSlimmer {
 
         // Collect all imports from the code directory
         let mut import_collector = ImportCollector::new();
-        self.collect_imports_from_code(&mut import_collector)?;
+        self.collect_imports_from_code(&mut import_collector);
         let used_imports = import_collector.get_imports();
         tracing::info!(
             "Found {} unique imports in code",
@@ -111,17 +122,17 @@ impl VenvSlimmer {
     }
 
     /// Collect all imports from Python files in the code directory
-    fn collect_imports_from_code(&self, collector: &mut ImportCollector) -> Result<()> {
+    #[allow(clippy::redundant_closure_for_method_calls)]
+    fn collect_imports_from_code(&self, collector: &mut ImportCollector) {
         for entry in WalkDir::new(&self.code_directory)
             .into_iter()
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map_or(false, |ext| ext == "py"))
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "py"))
         {
             if let Err(e) = collector.collect_from_file(entry.path()) {
                 tracing::warn!("Failed to parse {}: {}", entry.path().display(), e);
             }
         }
-        Ok(())
     }
 
     /// Create the base venv structure
@@ -183,7 +194,7 @@ impl VenvSlimmer {
     }
 
     /// Find site-packages directory
-    fn find_site_packages(&self, venv_path: &Path) -> Result<PathBuf> {
+    fn find_site_packages(venv_path: &Path) -> Result<PathBuf> {
         let lib_path = venv_path.join("lib");
 
         for entry in fs::read_dir(&lib_path)? {
@@ -208,11 +219,11 @@ impl VenvSlimmer {
     /// Find or create site-packages directory in output venv
     fn find_or_create_site_packages(&self, venv_path: &Path) -> Result<PathBuf> {
         // Copy the Python version from source
-        let src_site_packages = self.find_site_packages(&self.source_venv)?;
+        let src_site_packages = Self::find_site_packages(&self.source_venv)?;
         let python_dir = src_site_packages
             .parent()
             .and_then(|p| p.file_name())
-            .and_then(|n| Some(n.to_string_lossy().to_string()))
+            .map(|n| n.to_string_lossy().to_string())
             .ok_or_else(|| {
                 TsrsError::InvalidVenvPath("Could not determine Python version".to_string())
             })?;
@@ -230,6 +241,7 @@ impl VenvSlimmer {
     }
 
     /// Recursively copy a directory
+    #[allow(clippy::only_used_in_recursion)]
     fn copy_dir_recursive(&self, src: &Path, dst: &Path) -> Result<()> {
         fs::create_dir_all(dst)?;
 

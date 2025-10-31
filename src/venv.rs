@@ -33,6 +33,10 @@ pub struct VenvAnalyzer {
 
 impl VenvAnalyzer {
     /// Create a new venv analyzer
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path does not exist.
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let venv_path = path.as_ref().to_path_buf();
 
@@ -48,9 +52,13 @@ impl VenvAnalyzer {
     }
 
     /// Analyze the venv and collect package information
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the analysis fails.
     pub fn analyze(&self) -> Result<VenvInfo> {
         let site_packages_path = self.find_site_packages()?;
-        let packages = self.discover_packages(&site_packages_path)?;
+        let packages = Self::discover_packages(&site_packages_path)?;
 
         Ok(VenvInfo {
             path: self.venv_path.clone(),
@@ -90,7 +98,7 @@ impl VenvAnalyzer {
     }
 
     /// Discover all installed packages
-    fn discover_packages(&self, site_packages: &Path) -> Result<Vec<PackageInfo>> {
+    fn discover_packages(site_packages: &Path) -> Result<Vec<PackageInfo>> {
         let mut packages = Vec::new();
         let mut seen = std::collections::HashSet::new();
 
@@ -104,14 +112,14 @@ impl VenvAnalyzer {
                 .to_string();
 
             // Skip special directories
-            if name.starts_with("_") || name.starts_with(".") || name == "dist-info" {
+            if name.starts_with('_') || name.starts_with('.') || name == "dist-info" {
                 continue;
             }
 
             if path.is_dir() && !seen.contains(&name) {
                 // Check if it has __init__.py (is a package)
                 if path.join("__init__.py").exists() || name.ends_with(".dist-info") {
-                    let version = self.extract_version(&name);
+                    let version = Self::extract_version(&name);
                     packages.push(PackageInfo {
                         name: name.clone(),
                         version,
@@ -127,7 +135,7 @@ impl VenvAnalyzer {
     }
 
     /// Extract version from dist-info directory name
-    fn extract_version(&self, name: &str) -> Option<String> {
+    fn extract_version(name: &str) -> Option<String> {
         if name.ends_with(".dist-info") {
             let parts: Vec<&str> = name.rsplitn(2, '-').collect();
             if parts.len() == 2 {
