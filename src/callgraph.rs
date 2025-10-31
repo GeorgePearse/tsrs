@@ -17,11 +17,13 @@ pub struct FunctionRef {
 
 impl FunctionRef {
     /// Create a new function reference
+    #[must_use]
     pub fn new(package: String, name: String) -> Self {
         FunctionRef { package, name }
     }
 
     /// Check if this is a standard library or builtin
+    #[must_use]
     pub fn is_builtin(&self) -> bool {
         matches!(
             self.package.as_str(),
@@ -45,6 +47,7 @@ pub struct PackageCallGraph {
 
 impl PackageCallGraph {
     /// Create a new package call graph
+    #[must_use]
     pub fn new(package: String) -> Self {
         PackageCallGraph {
             package,
@@ -80,16 +83,20 @@ pub struct CallGraphAnalyzer {
 
 impl CallGraphAnalyzer {
     /// Create a new call graph analyzer
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if regex compilation fails.
     pub fn new() -> Result<Self> {
         let function_pattern = Regex::new(r"^\s*(?:async\s+)?def\s+([a-zA-Z_][a-zA-Z0-9_]*)")
-            .map_err(|e| TsrsError::ParseError(format!("Failed to compile regex: {}", e)))?;
+            .map_err(|e| TsrsError::ParseError(format!("Failed to compile regex: {e}")))?;
 
         let call_pattern = Regex::new(r"\b([a-zA-Z_][a-zA-Z0-9_\.]*)\s*\(")
-            .map_err(|e| TsrsError::ParseError(format!("Failed to compile regex: {}", e)))?;
+            .map_err(|e| TsrsError::ParseError(format!("Failed to compile regex: {e}")))?;
 
         let import_pattern =
             Regex::new(r"^(?:from\s+([a-zA-Z0-9_\.]+)\s+)?import\s+([a-zA-Z0-9_,\s]+)")
-                .map_err(|e| TsrsError::ParseError(format!("Failed to compile regex: {}", e)))?;
+                .map_err(|e| TsrsError::ParseError(format!("Failed to compile regex: {e}")))?;
 
         Ok(CallGraphAnalyzer {
             graphs: HashMap::new(),
@@ -100,8 +107,12 @@ impl CallGraphAnalyzer {
     }
 
     /// Analyze a Python file and build call graph
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read.
     pub fn analyze_file<P: AsRef<Path>>(&mut self, path: P, package: &str) -> Result<()> {
-        let source = std::fs::read_to_string(path).map_err(|e| TsrsError::Io(e))?;
+        let source = std::fs::read_to_string(path).map_err(TsrsError::Io)?;
         self.analyze_source(package, &source);
         Ok(())
     }
@@ -153,16 +164,19 @@ impl CallGraphAnalyzer {
     }
 
     /// Get all call graphs
+    #[must_use]
     pub fn get_graphs(&self) -> &HashMap<String, PackageCallGraph> {
         &self.graphs
     }
 
     /// Get call graph for a specific package
+    #[must_use]
     pub fn get_graph(&self, package: &str) -> Option<&PackageCallGraph> {
         self.graphs.get(package)
     }
 
     /// Find unused functions in a package
+    #[must_use]
     pub fn find_unused_functions(&self, package: &str) -> HashSet<String> {
         if let Some(graph) = self.get_graph(package) {
             let called: HashSet<String> = graph.internal_calls.iter().cloned().collect();
@@ -178,6 +192,7 @@ impl CallGraphAnalyzer {
     }
 
     /// Find all external dependencies
+    #[must_use]
     pub fn find_external_dependencies(&self) -> HashSet<String> {
         let mut deps = HashSet::new();
         for graph in self.graphs.values() {

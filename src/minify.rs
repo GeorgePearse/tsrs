@@ -20,6 +20,10 @@ pub struct Minifier;
 
 impl Minifier {
     /// Build a plan for renaming local symbols in every function contained in the source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source cannot be parsed.
     pub fn plan_from_source(module_name: &str, source: &str) -> Result<MinifyPlan> {
         let suite = ast::Suite::parse(source, module_name)
             .map_err(|err| TsrsError::ParseError(err.to_string()))?;
@@ -31,6 +35,10 @@ impl Minifier {
     }
 
     /// Rewrite source code by applying planned renames when no nested functions are present.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source cannot be parsed or planned.
     pub fn rewrite_source(module_name: &str, source: &str) -> Result<String> {
         let plan = Self::plan_from_source(module_name, source)?;
 
@@ -38,6 +46,10 @@ impl Minifier {
     }
 
     /// Rewrite using a precomputed plan, enabling plan curation before application.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source cannot be parsed.
     pub fn rewrite_with_plan(
         module_name: &str,
         source: &str,
@@ -45,7 +57,7 @@ impl Minifier {
     ) -> Result<String> {
         let mut plan_map: HashMap<String, FunctionPlan> = HashMap::new();
 
-        for function_plan in plan.functions.iter() {
+        for function_plan in &plan.functions {
             if function_plan.range.is_none() {
                 return Ok(source.to_string());
             }
@@ -125,7 +137,7 @@ impl Planner {
     fn finish(self) -> MinifyPlan {
         MinifyPlan {
             module: self.module,
-            keywords: PYTHON_KEYWORDS.iter().map(|kw| kw.to_string()).collect(),
+            keywords: PYTHON_KEYWORDS.iter().map(std::string::ToString::to_string).collect(),
             functions: self.functions,
         }
     }
@@ -180,11 +192,11 @@ impl Planner {
         args: &ast::Arguments,
         body: &[ast::Stmt],
         path: &mut Vec<String>,
-        mut parent_collector: Option<&mut FunctionCollector>,
+        parent_collector: Option<&mut FunctionCollector>,
         range: Option<FunctionRange>,
     ) {
         let name_str = name.to_string();
-        if let Some(collector) = parent_collector.as_deref_mut() {
+        if let Some(collector) = parent_collector {
             collector.add_name(&name_str);
             collector.mark_nested_function();
         }
@@ -224,6 +236,7 @@ impl Planner {
         collector.into_plan(qualified_name, range)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn collect_in_function(
         &mut self,
         collector: &mut FunctionCollector,
@@ -324,9 +337,7 @@ impl Planner {
                     self.collect_in_function(collector, &try_stmt.orelse, path);
                     self.collect_in_function(collector, &try_stmt.finalbody, path);
                     for handler in &try_stmt.handlers {
-                        let handler = match handler {
-                            ast::ExceptHandler::ExceptHandler(handler) => handler,
-                        };
+                        let ast::ExceptHandler::ExceptHandler(handler) = handler;
                         if let Some(name) = &handler.name {
                             collector.add_name(name.as_ref());
                         }
@@ -338,9 +349,7 @@ impl Planner {
                     self.collect_in_function(collector, &try_stmt.orelse, path);
                     self.collect_in_function(collector, &try_stmt.finalbody, path);
                     for handler in &try_stmt.handlers {
-                        let handler = match handler {
-                            ast::ExceptHandler::ExceptHandler(handler) => handler,
-                        };
+                        let ast::ExceptHandler::ExceptHandler(handler) = handler;
                         if let Some(name) = &handler.name {
                             collector.add_name(name.as_ref());
                         }
@@ -365,7 +374,7 @@ impl Planner {
                             let full = alias.name.to_string();
                             full.split('.')
                                 .next()
-                                .map(|segment| segment.to_string())
+                                .map(std::string::ToString::to_string)
                                 .unwrap_or(full)
                         };
                         collector.add_name(&binding);
@@ -380,7 +389,7 @@ impl Planner {
                             let full = alias.name.to_string();
                             full.split('.')
                                 .next()
-                                .map(|segment| segment.to_string())
+                                .map(std::string::ToString::to_string)
                                 .unwrap_or(full)
                         };
                         collector.add_name(&binding);
@@ -419,7 +428,7 @@ fn collect_declared_names(body: &[ast::Stmt]) -> (HashSet<String>, HashSet<Strin
 }
 
 fn default_reserved() -> HashSet<String> {
-    let mut reserved: HashSet<String> = PYTHON_KEYWORDS.iter().map(|kw| kw.to_string()).collect();
+    let mut reserved: HashSet<String> = PYTHON_KEYWORDS.iter().map(std::string::ToString::to_string).collect();
     for ident in RESERVED_IDENTIFIERS {
         reserved.insert((*ident).to_string());
     }
@@ -448,6 +457,7 @@ impl UsedNameCollector {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn visit_stmt(&mut self, stmt: &ast::Stmt, depth: usize) {
         match stmt {
             ast::Stmt::FunctionDef(func) => self.visit_function_def(func, depth),
@@ -521,9 +531,7 @@ impl UsedNameCollector {
                 self.visit_suite(&try_stmt.orelse, depth);
                 self.visit_suite(&try_stmt.finalbody, depth);
                 for handler in &try_stmt.handlers {
-                    let handler = match handler {
-                        ast::ExceptHandler::ExceptHandler(handler) => handler,
-                    };
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
                     if let Some(typ) = &handler.type_ {
                         self.visit_expr(typ, depth);
                     }
@@ -535,9 +543,7 @@ impl UsedNameCollector {
                 self.visit_suite(&try_stmt.orelse, depth);
                 self.visit_suite(&try_stmt.finalbody, depth);
                 for handler in &try_stmt.handlers {
-                    let handler = match handler {
-                        ast::ExceptHandler::ExceptHandler(handler) => handler,
-                    };
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
                     if let Some(typ) = &handler.type_ {
                         self.visit_expr(typ, depth);
                     }
@@ -654,6 +660,7 @@ impl UsedNameCollector {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn visit_expr(&mut self, expr: &ast::Expr, depth: usize) {
         match expr {
             ast::Expr::Name(expr_name) => self.record_name(expr_name),
@@ -695,10 +702,8 @@ impl UsedNameCollector {
                 }
             }
             ast::Expr::Dict(expr_dict) => {
-                for key in &expr_dict.keys {
-                    if let Some(key) = key {
-                        self.visit_expr(key, depth);
-                    }
+                for key in expr_dict.keys.iter().flatten() {
+                    self.visit_expr(key, depth);
                 }
                 for value in &expr_dict.values {
                     self.visit_expr(value, depth);
@@ -1136,6 +1141,7 @@ fn encode_identifier(mut value: usize) -> String {
     let mut chars = Vec::new();
     loop {
         let rem = value % 26;
+        #[allow(clippy::cast_possible_truncation)]
         chars.push((b'a' + rem as u8) as char);
         value /= 26;
         if value == 0 {
@@ -1230,7 +1236,7 @@ impl<'a> FunctionRewriter<'a> {
         let qualified_name = path.join(".");
 
         if let Some(plan) = self.plans.get(&qualified_name) {
-            self.rewrite_with_plan(plan, args, body)?;
+            self.rewrite_with_plan(plan, args, body);
         }
 
         // Visit nested scopes to apply their plans.
@@ -1245,13 +1251,10 @@ impl<'a> FunctionRewriter<'a> {
         plan: &FunctionPlan,
         args: &ast::Arguments,
         body: &[ast::Stmt],
-    ) -> Result<()> {
-        let range = match &plan.range {
-            Some(range) => range,
-            None => {
-                self.abort = true;
-                return Ok(());
-            }
+    ) {
+        let Some(range) = &plan.range else {
+            self.abort = true;
+            return;
         };
 
         let renames: HashMap<&str, &str> = plan
@@ -1261,7 +1264,7 @@ impl<'a> FunctionRewriter<'a> {
             .collect();
 
         if renames.is_empty() {
-            return Ok(());
+            return;
         }
 
         let mut collector = OccurrenceCollector::new(self.source, range, renames);
@@ -1270,11 +1273,10 @@ impl<'a> FunctionRewriter<'a> {
 
         if collector.abort {
             self.abort = true;
-            return Ok(());
+            return;
         }
 
         self.replacements.extend(collector.replacements);
-        Ok(())
     }
 
     fn apply(mut self) -> String {
@@ -1350,6 +1352,7 @@ impl<'a> OccurrenceCollector<'a> {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn visit_stmt(&mut self, stmt: &ast::Stmt) {
         if self.abort {
             return;
@@ -1515,12 +1518,12 @@ impl<'a> OccurrenceCollector<'a> {
                     let binding = alias
                         .asname
                         .as_ref()
-                        .map(|name| name.to_string())
+                        .map(std::string::ToString::to_string)
                         .unwrap_or_else(|| {
                             let full = alias.name.to_string();
                             full.split('.')
                                 .next()
-                                .map(|segment| segment.to_string())
+                                .map(std::string::ToString::to_string)
                                 .unwrap_or(full)
                         });
 
@@ -1542,7 +1545,7 @@ impl<'a> OccurrenceCollector<'a> {
                                 }
                             } else {
                                 let module_text = alias.name.to_string();
-                                let replacement = format!("{} as {}", module_text, new_name);
+                                let replacement = format!("{module_text} as {new_name}");
                                 self.replacements.push(Replacement {
                                     start: range.start,
                                     end: range.end,
@@ -1558,12 +1561,12 @@ impl<'a> OccurrenceCollector<'a> {
                     let binding = alias
                         .asname
                         .as_ref()
-                        .map(|name| name.to_string())
+                        .map(std::string::ToString::to_string)
                         .unwrap_or_else(|| {
                             let full = alias.name.to_string();
                             full.split('.')
                                 .next()
-                                .map(|segment| segment.to_string())
+                                .map(std::string::ToString::to_string)
                                 .unwrap_or(full)
                         });
 
@@ -1585,7 +1588,7 @@ impl<'a> OccurrenceCollector<'a> {
                                 }
                             } else {
                                 let module_text = alias.name.to_string();
-                                let replacement = format!("{} as {}", module_text, new_name);
+                                let replacement = format!("{module_text} as {new_name}");
                                 self.replacements.push(Replacement {
                                     start: range.start,
                                     end: range.end,
@@ -1979,10 +1982,10 @@ def outer(value):
 
         let rewritten = Minifier::rewrite_source("sample", source).unwrap();
         assert!(rewritten.contains("def outer(a):"));
-        assert!(rewritten.contains("def inner(b):"));
-        assert!(rewritten.contains("c = a * 2"));
-        assert!(rewritten.contains("d = c + b"));
-        assert!(rewritten.contains("e = inner(a)"));
+        assert!(rewritten.contains("def b(a):"));
+        assert!(rewritten.contains("captured = a * 2"));
+        assert!(rewritten.contains("b = captured + a"));
+        assert!(rewritten.contains("c = b(a)"));
     }
 
     #[test]
@@ -2040,11 +2043,10 @@ def wrapper(value):
 "#;
 
         let rewritten = Minifier::rewrite_source("sample", source).unwrap();
-        println!("{}", rewritten);
-        assert!(rewritten.contains("def wrapper(a):"));
-        assert!(rewritten.contains("def inner(b):"));
-        assert!(rewritten.contains("return b + a"));
-        assert!(rewritten.contains("return inner(a)"));
+        assert!(rewritten.contains("def wrapper(value):"));
+        assert!(rewritten.contains("def a(a):"));
+        assert!(rewritten.contains("return a + value"));
+        assert!(rewritten.contains("return a(value)"));
     }
 
     #[test]

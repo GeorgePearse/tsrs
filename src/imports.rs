@@ -15,6 +15,7 @@ pub struct ImportSet {
 
 impl ImportSet {
     /// Create a new import set
+    #[must_use]
     pub fn new() -> Self {
         ImportSet {
             imports: HashSet::new(),
@@ -27,6 +28,7 @@ impl ImportSet {
     }
 
     /// Get all imports
+    #[must_use]
     pub fn get_imports(&self) -> Vec<String> {
         let mut imports: Vec<_> = self.imports.iter().cloned().collect();
         imports.sort();
@@ -41,6 +43,7 @@ pub struct ImportCollector {
 
 impl ImportCollector {
     /// Create a new import collector
+    #[must_use]
     pub fn new() -> Self {
         ImportCollector {
             imports: ImportSet::new(),
@@ -48,6 +51,10 @@ impl ImportCollector {
     }
 
     /// Parse a Python file and extract imports
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or parsed.
     pub fn collect_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
         let path_ref = path.as_ref();
         let source = std::fs::read_to_string(path_ref).map_err(TsrsError::Io)?;
@@ -57,6 +64,10 @@ impl ImportCollector {
     }
 
     /// Parse Python source code and extract imports
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source cannot be parsed.
     pub fn collect_from_source(&mut self, source: &str) -> Result<()> {
         self.collect_from_source_with_name(source, "<memory>")?;
         Ok(())
@@ -105,9 +116,7 @@ impl ImportCollector {
                 self.visit_suite(&try_stmt.orelse);
                 self.visit_suite(&try_stmt.finalbody);
                 for handler in &try_stmt.handlers {
-                    let handler = match handler {
-                        ast::ExceptHandler::ExceptHandler(inner) => inner,
-                    };
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
                     self.visit_suite(&handler.body);
                 }
             }
@@ -116,9 +125,7 @@ impl ImportCollector {
                 self.visit_suite(&try_stmt.orelse);
                 self.visit_suite(&try_stmt.finalbody);
                 for handler in &try_stmt.handlers {
-                    let handler = match handler {
-                        ast::ExceptHandler::ExceptHandler(inner) => inner,
-                    };
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
                     self.visit_suite(&handler.body);
                 }
             }
@@ -141,8 +148,7 @@ impl ImportCollector {
         let level = import_from
             .level
             .as_ref()
-            .map(|lvl| lvl.to_u32())
-            .unwrap_or(0);
+            .map_or(0, ast::Int::to_u32);
 
         if level > 0 {
             // Relative imports refer to the current package; skip to avoid
@@ -173,6 +179,7 @@ impl ImportCollector {
     }
 
     /// Get collected imports
+    #[must_use]
     pub fn get_imports(&self) -> ImportSet {
         self.imports.clone()
     }
