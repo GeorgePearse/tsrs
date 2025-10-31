@@ -43,6 +43,7 @@ cargo clippy
 ### Related Projects
 - **[Ruff](https://github.com/astral-sh/ruff)** - An extremely fast Python linter written in Rust. Uses `ruff_python_parser` for parsing Python code.
 - **[Pylyzer](https://github.com/mtshiba/pylyzer)** - A fast, feature-rich static code analyzer & language server for Python. Uses Rust internally with type checking capabilities.
+- **[Skylos](https://github.com/duriantaco/skylos)** - A static analysis tool for Python codebases that detects dead code, unused functions, classes, imports, and variables. Also includes security flaw detection.
 
 ### Discussion
 - [Reddit Discussion: Is there any support in Python for something like tree-shaking?](https://www.reddit.com/r/Python/comments/aqqzjl/is_there_any_support_in_python_for_something/)
