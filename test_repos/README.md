@@ -63,6 +63,43 @@ Size comparison:
   Slimmed:  45M
 ```
 
+## Test Repos Overview
+
+### 1. **simple-data**
+*Data processing with requests, click, pydantic*
+- Fetches data from URLs
+- Validates with Pydantic models
+- CLI with Click
+- **Size reduction**: ~30-40%
+
+### 2. **cli-tool**
+*CLI framework with typer and rich*
+- CLI commands with Typer
+- Rich formatted output
+- Table rendering
+- **Size reduction**: ~25-35%
+
+### 3. **pandas-analysis**
+*Data analysis with pandas and numpy*
+- DataFrame operations
+- Statistical analysis
+- Group-by aggregations
+- **Size reduction**: ~40-50%
+
+### 4. **ml-classifier**
+*Machine learning with scikit-learn*
+- Dataset generation
+- Model training (Random Forest)
+- Performance evaluation (accuracy, precision, recall)
+- **Size reduction**: ~45-55%
+
+### 5. **data-viz**
+*Data visualization with matplotlib and seaborn*
+- Line plots
+- Scatter plots
+- Distribution plots
+- **Size reduction**: ~35-45%
+
 ## Adding New Test Repos
 
 Create a new directory with:
