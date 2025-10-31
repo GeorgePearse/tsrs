@@ -62,6 +62,30 @@ maturin develop
 maturin build --release
 ```
 
+## Architecture
+
+### Core Modules
+
+- **`venv`** - Virtual environment discovery and package analysis
+- **`imports`** - Import statement extraction and tracking
+- **`callgraph`** - Function call graph analysis per package
+  - Tracks which functions are defined in each package
+  - Maps external dependencies between packages
+  - Identifies unused/dead code that is never called
+- **`slim`** - Creates minimal venvs based on code analysis
+
+### How Tree-Shaking Works
+
+The tool builds a complete picture of your code's dependencies:
+
+1. **Import Analysis**: Extracts all `import` and `from...import` statements from your code
+2. **Call Graph Building**: Analyzes function definitions and calls in your Python code
+3. **Package Mapping**: Maps imports to actual packages in your venv
+4. **Dead Code Detection**: Identifies functions/classes that are defined but never used
+5. **Dependency Reduction**: Creates a slim venv with only the necessary packages
+
+This multi-layered approach ensures you don't accidentally remove code that's used through indirect calls or dynamic imports.
+
 ## Development
 
 ```bash
