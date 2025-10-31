@@ -1,0 +1,13 @@
+[package]
+name = "tsrs"
+version = "0.1.0"
+edition = "2021"
+description = "Tree-shaking in Rust for Python"
+authors = ["George Pearse"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module"] }
+
+[lib]
+name = "tsrs"
+crate-type = ["cdylib"]
