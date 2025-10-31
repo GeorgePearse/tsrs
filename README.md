@@ -2,6 +2,12 @@
 
 A high-performance tree-shaking implementation in Rust for Python modules and packages.
 
+## Manifesto
+
+> "Ever had someone say, 'just copy the function, we don't need the whole package'? What if that didn't have to be true?"
+
+Tree-shaking enables developers to depend on large, well-designed libraries while only deploying the code they actually use. No more choosing between monolithic packages or duplicating code. Get the best of both worlds: leverage battle-tested libraries while keeping your deployments lean and efficient.
+
 ## Overview
 
 Tree-shaking is the process of analyzing code to identify and remove unused exports from Python modules. This project provides a Rust-based implementation that can be used from Python to detect dead code and optimize module sizes.
