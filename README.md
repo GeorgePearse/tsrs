@@ -32,6 +32,10 @@ cargo fmt
 cargo clippy
 ```
 
+## References
+
+- [Reddit Discussion: Is there any support in Python for something like tree-shaking?](https://www.reddit.com/r/Python/comments/aqqzjl/is_there_any_support_in_python_for_something/)
+
 ## License
 
 TBD
