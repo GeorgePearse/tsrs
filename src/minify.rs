@@ -42,7 +42,7 @@ impl Minifier {
     pub fn rewrite_source(module_name: &str, source: &str) -> Result<String> {
         let plan = Self::plan_from_source(module_name, source)?;
 
-        Self::rewrite_with_plan(module_name, source, &plan)
+        Self::rewrite_with_plan_internal(module_name, source, &plan)
     }
 
     /// Rewrite using a precomputed plan, enabling plan curation before application.
@@ -51,6 +51,14 @@ impl Minifier {
     ///
     /// Returns an error if the source cannot be parsed.
     pub fn rewrite_with_plan(module_name: &str, source: &str, plan: &MinifyPlan) -> Result<String> {
+        Self::rewrite_with_plan_internal(module_name, source, plan)
+    }
+
+    fn rewrite_with_plan_internal(
+        module_name: &str,
+        source: &str,
+        plan: &MinifyPlan,
+    ) -> Result<String> {
         let mut plan_map: HashMap<String, FunctionPlan> = HashMap::new();
 
         for function_plan in &plan.functions {
@@ -101,6 +109,10 @@ pub struct FunctionPlan {
     pub has_nested_functions: bool,
     /// Indicates if the function body contains import statements.
     pub has_imports: bool,
+    #[serde(default)]
+    pub has_match_statement: bool,
+    #[serde(default)]
+    pub has_comprehension: bool,
 }
 
 /// Mapping from an original identifier to a generated replacement.
@@ -290,12 +302,17 @@ impl Planner {
                     for target in &assign.targets {
                         collector.add_names_from_expr(target);
                     }
+                    collector.collect_from_expression(&assign.value);
                 }
                 ast::Stmt::AnnAssign(assign) => {
                     collector.add_names_from_expr(&assign.target);
+                    if let Some(value) = &assign.value {
+                        collector.collect_from_expression(value);
+                    }
                 }
                 ast::Stmt::AugAssign(assign) => {
                     collector.add_names_from_expr(&assign.target);
+                    collector.collect_from_expression(&assign.value);
                 }
                 ast::Stmt::For(for_stmt) => {
                     collector.add_names_from_expr(&for_stmt.target);
@@ -356,6 +373,7 @@ impl Planner {
                     }
                 }
                 ast::Stmt::Match(match_stmt) => {
+                    collector.has_match_statement = true;
                     for case in &match_stmt.cases {
                         collector.add_names_from_pattern(&case.pattern);
                         if let Some(guard) = &case.guard {
@@ -367,31 +385,32 @@ impl Planner {
                 ast::Stmt::Import(import_stmt) => {
                     collector.mark_import();
                     for alias in &import_stmt.names {
-                        let binding = if let Some(asname) = &alias.asname {
-                            asname.to_string()
+                        if let Some(asname) = &alias.asname {
+                            collector.reserve_name(asname.as_ref());
                         } else {
-                            let full = alias.name.to_string();
-                            full.split('.')
-                                .next()
-                                .map(std::string::ToString::to_string)
-                                .unwrap_or(full)
-                        };
-                        collector.add_name(&binding);
+                            let module = alias.name.to_string();
+                            let base = module.split('.').next().unwrap_or(&module);
+                            if module.contains('.') {
+                                collector.reserve_name(base);
+                            } else {
+                                collector.add_name(base);
+                            }
+                        }
                     }
                 }
                 ast::Stmt::ImportFrom(import_from) => {
                     collector.mark_import();
                     for alias in &import_from.names {
-                        let binding = if let Some(asname) = &alias.asname {
-                            asname.to_string()
+                        let name = alias.name.to_string();
+                        if name == "*" {
+                            continue;
+                        }
+                        if let Some(asname) = &alias.asname {
+                            collector.reserve_name(asname.as_ref());
                         } else {
-                            let full = alias.name.to_string();
-                            full.split('.')
-                                .next()
-                                .map(std::string::ToString::to_string)
-                                .unwrap_or(full)
-                        };
-                        collector.add_name(&binding);
+                            let base = name.split('.').next().unwrap_or(&name);
+                            collector.add_name(base);
+                        }
                     }
                 }
                 ast::Stmt::Expr(expr_stmt) => {
@@ -854,6 +873,8 @@ struct FunctionCollector {
     reserved: HashSet<String>,
     has_nested_functions: bool,
     has_imports: bool,
+    has_match_statement: bool,
+    has_comprehension: bool,
 }
 
 impl FunctionCollector {
@@ -865,6 +886,8 @@ impl FunctionCollector {
             reserved,
             has_nested_functions: false,
             has_imports: false,
+            has_match_statement: false,
+            has_comprehension: false,
         }
     }
 
@@ -948,6 +971,26 @@ impl FunctionCollector {
             }
             ast::Expr::Starred(ast::ExprStarred { value, .. }) => {
                 self.add_names_from_expr(value);
+            }
+            _ => {}
+        }
+    }
+
+    fn reserve_names_from_expr(&mut self, expr: &ast::Expr) {
+        match expr {
+            ast::Expr::Name(ast::ExprName { id, ctx, .. }) => {
+                if matches!(ctx, ast::ExprContext::Store | ast::ExprContext::Del) {
+                    self.reserve_name(id.as_ref());
+                }
+            }
+            ast::Expr::Tuple(ast::ExprTuple { elts, .. })
+            | ast::Expr::List(ast::ExprList { elts, .. }) => {
+                for elt in elts {
+                    self.reserve_names_from_expr(elt);
+                }
+            }
+            ast::Expr::Starred(ast::ExprStarred { value, .. }) => {
+                self.reserve_names_from_expr(value);
             }
             _ => {}
         }
@@ -1074,6 +1117,8 @@ impl FunctionCollector {
 
     fn collect_from_comprehension_generators(&mut self, generators: &[ast::Comprehension]) {
         for generator in generators {
+            self.has_comprehension = true;
+            self.reserve_names_from_expr(&generator.target);
             self.collect_from_expression(&generator.iter);
             for condition in &generator.ifs {
                 self.collect_from_expression(condition);
@@ -1105,6 +1150,8 @@ impl FunctionCollector {
             range,
             has_nested_functions: self.has_nested_functions,
             has_imports: self.has_imports,
+            has_match_statement: self.has_match_statement,
+            has_comprehension: self.has_comprehension,
         }
     }
 }
@@ -1198,7 +1245,13 @@ impl<'a> FunctionRewriter<'a> {
         for stmt in suite {
             match stmt {
                 ast::Stmt::FunctionDef(func) => {
-                    self.process_function(&func.name, &func.args, &func.body, path)?;
+                    self.process_function(
+                        &func.name,
+                        &func.args,
+                        func.returns.as_deref(),
+                        &func.body,
+                        path,
+                    )?;
                 }
                 ast::Stmt::AsyncFunctionDef(func) => {
                     self.process_async_function(func, path)?;
@@ -1224,13 +1277,20 @@ impl<'a> FunctionRewriter<'a> {
         func: &ast::StmtAsyncFunctionDef,
         path: &mut Vec<String>,
     ) -> Result<()> {
-        self.process_function(&func.name, &func.args, &func.body, path)
+        self.process_function(
+            &func.name,
+            &func.args,
+            func.returns.as_deref(),
+            &func.body,
+            path,
+        )
     }
 
     fn process_function(
         &mut self,
         name: &ast::Identifier,
         args: &ast::Arguments,
+        returns: Option<&ast::Expr>,
         body: &[ast::Stmt],
         path: &mut Vec<String>,
     ) -> Result<()> {
@@ -1238,7 +1298,15 @@ impl<'a> FunctionRewriter<'a> {
         let qualified_name = path.join(".");
 
         if let Some(plan) = self.plans.get(&qualified_name) {
-            self.rewrite_with_plan(plan, args, body);
+            if plan.has_match_statement {
+                self.abort = true;
+            } else {
+                if plan.has_comprehension {
+                    self.abort = true;
+                } else {
+                    self.rewrite_with_plan(plan, args, returns, body);
+                }
+            }
         }
 
         // Visit nested scopes to apply their plans.
@@ -1252,6 +1320,7 @@ impl<'a> FunctionRewriter<'a> {
         &mut self,
         plan: &FunctionPlan,
         args: &ast::Arguments,
+        returns: Option<&ast::Expr>,
         body: &[ast::Stmt],
     ) {
         let Some(range) = &plan.range else {
@@ -1269,8 +1338,12 @@ impl<'a> FunctionRewriter<'a> {
             return;
         }
 
-        let mut collector = OccurrenceCollector::new(self.source, range, renames);
+        let excluded: HashSet<&str> = plan.excluded.iter().map(|name| name.as_str()).collect();
+        let mut collector = OccurrenceCollector::new(self.source, range, renames, excluded);
         collector.visit_arguments(args);
+        if let Some(annotation) = returns {
+            collector.with_annotation(|visitor| visitor.visit_expr(annotation));
+        }
         collector.visit_statements(body);
 
         if collector.abort {
@@ -1285,8 +1358,8 @@ impl<'a> FunctionRewriter<'a> {
         if self.replacements.is_empty() {
             return self.source.to_string();
         }
-
-        self.replacements.sort_by(|a, b| b.start.cmp(&a.start));
+        self.replacements
+            .sort_by(|a, b| b.start.cmp(&a.start).then(b.end.cmp(&a.end)));
         let mut result = self.source.to_string();
         for replacement in self.replacements {
             result.replace_range(replacement.start..replacement.end, &replacement.text);
@@ -1299,7 +1372,9 @@ struct OccurrenceCollector<'a> {
     source: &'a str,
     function_range: &'a FunctionRange,
     renames: HashMap<&'a str, &'a str>,
+    excluded: HashSet<&'a str>,
     replacements: Vec<Replacement>,
+    in_annotation: bool,
     abort: bool,
 }
 
@@ -1308,14 +1383,27 @@ impl<'a> OccurrenceCollector<'a> {
         source: &'a str,
         function_range: &'a FunctionRange,
         renames: HashMap<&'a str, &'a str>,
+        excluded: HashSet<&'a str>,
     ) -> Self {
         Self {
             source,
             function_range,
             renames,
+            excluded,
             replacements: Vec::new(),
+            in_annotation: false,
             abort: false,
         }
+    }
+
+    fn with_annotation<F>(&mut self, visitor: F)
+    where
+        F: FnOnce(&mut Self),
+    {
+        let previous = self.in_annotation;
+        self.in_annotation = true;
+        visitor(self);
+        self.in_annotation = previous;
     }
 
     fn visit_arguments(&mut self, args: &ast::Arguments) {
@@ -1411,7 +1499,7 @@ impl<'a> OccurrenceCollector<'a> {
                 if let Some(value) = &assign.value {
                     self.visit_expr(value);
                 }
-                self.visit_expr(&assign.annotation);
+                self.with_annotation(|collector| collector.visit_expr(&assign.annotation));
             }
             ast::Stmt::AugAssign(assign) => {
                 self.visit_expr(&assign.target);
@@ -1495,6 +1583,9 @@ impl<'a> OccurrenceCollector<'a> {
                     self.visit_expr(target);
                 }
             }
+            ast::Stmt::TypeAlias(type_alias) => {
+                self.with_annotation(|collector| collector.visit_expr(&type_alias.value));
+            }
             ast::Stmt::Match(_) | ast::Stmt::Import(_) | ast::Stmt::ImportFrom(_) => {
                 // Imports introduce bindings; record alias targets conservatively.
                 self.visit_import(stmt);
@@ -1511,36 +1602,28 @@ impl<'a> OccurrenceCollector<'a> {
         match stmt {
             ast::Stmt::Import(import_stmt) => {
                 for alias in &import_stmt.names {
-                    let binding = alias.asname.as_ref().map_or_else(
-                        || {
-                            let full = alias.name.to_string();
-                            full.split('.')
+                    let full_name = alias.name.to_string();
+                    let binding = alias
+                        .asname
+                        .as_ref()
+                        .map(std::string::ToString::to_string)
+                        .unwrap_or_else(|| {
+                            full_name
+                                .split('.')
                                 .next()
-                                .map(std::string::ToString::to_string)
-                                .unwrap_or(full)
-                        },
-                        std::string::ToString::to_string,
-                    );
+                                .unwrap_or(&full_name)
+                                .to_string()
+                        });
+
+                    if alias.asname.is_some() {
+                        continue;
+                    }
 
                     if let Some(new_name) = self.renames.get(binding.as_str()) {
                         if binding != *new_name {
                             let range = range_from_node(alias);
-                            if alias.asname.is_some() {
-                                if let Some((start, end)) =
-                                    find_identifier_in_range(self.source, &range, binding.as_str())
-                                {
-                                    self.replacements.push(Replacement {
-                                        start,
-                                        end,
-                                        text: (*new_name).to_string(),
-                                    });
-                                } else {
-                                    self.abort = true;
-                                    return;
-                                }
-                            } else {
-                                let module_text = alias.name.to_string();
-                                let replacement = format!("{module_text} as {new_name}");
+                            if !full_name.contains('.') {
+                                let replacement = format!("{full_name} as {new_name}");
                                 self.replacements.push(Replacement {
                                     start: range.start,
                                     end: range.end,
@@ -1553,6 +1636,9 @@ impl<'a> OccurrenceCollector<'a> {
             }
             ast::Stmt::ImportFrom(import_from) => {
                 for alias in &import_from.names {
+                    if alias.name.to_string().as_str() == "*" {
+                        continue;
+                    }
                     let binding = alias.asname.as_ref().map_or_else(
                         || {
                             let full = alias.name.to_string();
@@ -1564,31 +1650,20 @@ impl<'a> OccurrenceCollector<'a> {
                         std::string::ToString::to_string,
                     );
 
+                    if alias.asname.is_some() {
+                        continue;
+                    }
+
                     if let Some(new_name) = self.renames.get(binding.as_str()) {
                         if binding != *new_name {
                             let range = range_from_node(alias);
-                            if alias.asname.is_some() {
-                                if let Some((start, end)) =
-                                    find_identifier_in_range(self.source, &range, binding.as_str())
-                                {
-                                    self.replacements.push(Replacement {
-                                        start,
-                                        end,
-                                        text: (*new_name).to_string(),
-                                    });
-                                } else {
-                                    self.abort = true;
-                                    return;
-                                }
-                            } else {
-                                let module_text = alias.name.to_string();
-                                let replacement = format!("{module_text} as {new_name}");
-                                self.replacements.push(Replacement {
-                                    start: range.start,
-                                    end: range.end,
-                                    text: replacement,
-                                });
-                            }
+                            let module_text = alias.name.to_string();
+                            let replacement = format!("{module_text} as {new_name}");
+                            self.replacements.push(Replacement {
+                                start: range.start,
+                                end: range.end,
+                                text: replacement,
+                            });
                         }
                     }
                 }
@@ -1760,15 +1835,27 @@ impl<'a> OccurrenceCollector<'a> {
 
     fn record_arg(&mut self, arg: &ast::Arg) {
         let name = arg.arg.as_ref();
-        let range = range_from_node(arg);
-        self.record_identifier(name, range);
+        let arg_range = range_from_node(arg);
+        if let Some((start, end)) = find_identifier_in_range(self.source, &arg_range, name) {
+            self.record_identifier(name, FunctionRange { start, end });
+        } else {
+            self.abort = true;
+            return;
+        }
         if let Some(annotation) = &arg.annotation {
-            self.visit_expr(annotation);
+            self.with_annotation(|collector| collector.visit_expr(annotation));
         }
     }
 
     fn record_identifier(&mut self, name: &str, node_range: FunctionRange) {
+        if self.in_annotation {
+            return;
+        }
         if self.abort {
+            return;
+        }
+
+        if self.excluded.contains(name) {
             return;
         }
 
@@ -1974,6 +2061,7 @@ def outer(value):
 "#;
 
         let rewritten = Minifier::rewrite_source("sample", source).unwrap();
+        dbg!(&rewritten);
         assert!(rewritten.contains("def outer(a):"));
         assert!(rewritten.contains("def b(a):"));
         assert!(rewritten.contains("captured = a * 2"));
@@ -2051,9 +2139,11 @@ def loader(path):
     return data
 "#;
 
+        let plan = Minifier::plan_from_source("sample", source).unwrap();
+        assert!(plan.functions[0].excluded.contains(&"j".to_string()));
         let rewritten = Minifier::rewrite_source("sample", source).unwrap();
-        assert!(rewritten.contains("import json as b"));
-        assert!(rewritten.contains("b.load(a)"));
+        assert!(rewritten.contains("import json as j"));
+        assert!(rewritten.contains("j.load(a)"));
     }
 
     #[test]
@@ -2077,9 +2167,13 @@ def normalize(parts):
     return join_path(*parts)
 "#;
 
+        let plan = Minifier::plan_from_source("sample", source).unwrap();
+        assert!(plan.functions[0]
+            .excluded
+            .contains(&"join_path".to_string()));
         let rewritten = Minifier::rewrite_source("sample", source).unwrap();
-        assert!(rewritten.contains("from os.path import join as b"));
-        assert!(rewritten.contains("return b(*a)"));
+        assert!(rewritten.contains("from os.path import join as join_path"));
+        assert!(rewritten.contains("return join_path(*a)"));
     }
 
     #[test]
@@ -2094,5 +2188,140 @@ def transform(data, offset):
         assert!(rewritten.contains("def transform(a, b):"));
         assert!(rewritten.contains("c = b - 1"));
         assert!(rewritten.contains("[value + b for value in a if value > c]"));
+    }
+
+    #[test]
+    fn rewrite_skips_annotation_renames() {
+        let source = r#"
+def annotate(value: value) -> value:
+    alias: value = value
+    extra: value = alias
+    return extra
+"#;
+
+        let rewritten = Minifier::rewrite_source("sample", source).unwrap();
+        assert!(rewritten.contains("def annotate(a: value) -> value:"));
+        assert!(rewritten.contains("b: value = a"));
+        assert!(rewritten.contains("c: value = b"));
+    }
+
+    #[test]
+    fn rewrite_respects_global_and_nonlocal() {
+        let source = r#"
+counter = 0
+
+def outer(value):
+    global counter
+    total = value + counter
+    counter = total
+    def inner():
+        nonlocal total
+        total = total + 1
+        return total
+    return inner()
+"#;
+
+        let rewritten = Minifier::rewrite_source("sample", source).unwrap();
+        assert!(rewritten.contains("global counter"));
+        assert!(rewritten.contains("nonlocal total"));
+        assert!(rewritten.contains("total = a + counter"));
+        assert!(rewritten.contains("counter = total"));
+        assert!(rewritten.contains("total = total + 1"));
+        assert!(rewritten.contains("def b():"));
+    }
+
+    #[test]
+    fn rewrite_skips_from_import_star() {
+        let source = r#"
+from tools import *
+
+def outer(value):
+    helper = value + 1
+    return helper
+"#;
+
+        let rewritten = Minifier::rewrite_source("sample", source).unwrap();
+        assert!(rewritten.contains("from tools import *"));
+        assert!(rewritten.contains("def outer(a):"));
+        assert!(rewritten.contains("b = a + 1"));
+    }
+
+    #[test]
+    fn rewrite_handles_import_alias_mixture() {
+        let source = r#"
+def combine(a):
+    import json
+    import yaml as y
+    data = json.dumps(a)
+    return y.safe_load(data)
+"#;
+
+        let plan = Minifier::plan_from_source("sample", source).unwrap();
+        assert!(plan.functions[0].excluded.contains(&"y".to_string()));
+        let rewritten = Minifier::rewrite_source("sample", source).unwrap();
+        assert!(rewritten.contains("import json as b"));
+        assert!(rewritten.contains("import yaml as y"));
+        assert!(rewritten.contains("c = b.dumps(a)"));
+        assert!(rewritten.contains("return y.safe_load(c)"));
+    }
+
+    #[test]
+    fn rewrite_skips_dotted_import_without_alias() {
+        let source = r#"
+def make_path(parts):
+    import os.path
+    return os.path.join(*parts)
+"#;
+
+        let plan = Minifier::plan_from_source("sample", source).unwrap();
+        assert!(plan.functions[0].excluded.contains(&"os".to_string()));
+        let rewritten = Minifier::rewrite_source("sample", source).unwrap();
+        assert!(rewritten.contains("import os.path"));
+        assert!(rewritten.contains("return os.path.join(*a)"));
+    }
+
+    #[test]
+    fn rewrite_handles_from_import_multiple() {
+        let source = r#"
+def use_pkg(a, b):
+    from pkg import thing, another
+    return thing(a) + another(b)
+"#;
+
+        let rewritten = Minifier::rewrite_source("sample", source).unwrap();
+        assert!(rewritten.contains("from pkg import thing as c, another as d"));
+        assert!(rewritten.contains("return c(a) + d(b)"));
+    }
+
+    #[test]
+    fn rewrite_noop_with_match() {
+        let source = r#"
+def classify(value):
+    match value:
+        case 0:
+            return "zero"
+        case other:
+            return other
+    temp = value + 1
+    return temp
+"#;
+
+        let rewritten = Minifier::rewrite_source("sample", source).unwrap();
+        assert_eq!(rewritten, source);
+    }
+
+    #[test]
+    fn comprehensions_preserve_outer_names() {
+        let source = r#"
+def make_lists(values):
+    total = 0
+    squares = [total + num for num in values]
+    return squares, total
+"#;
+
+        let plan = Minifier::plan_from_source("sample", source).unwrap();
+        assert!(plan.functions[0].has_comprehension);
+        let rewritten = Minifier::rewrite_source("sample", source).unwrap();
+        assert_eq!(rewritten, source);
     }
 }

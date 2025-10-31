@@ -37,6 +37,12 @@ Tree-shaking is the process of analyzing code to identify and remove unused expo
 
 # Apply in place with a backup and stats
 ./target/debug/tsrs-cli apply-plan path/to/module.py --plan plan.json --in-place --backup-ext .bak --stats --json
+
+# Preview the planned changes without touching the file
+./target/debug/tsrs-cli apply-plan path/to/module.py --plan plan.json --diff
+
+# Persist plan application stats for later inspection
+./target/debug/tsrs-cli apply-plan path/to/module.py --plan plan.json --stats --output-json reports/apply-plan.json
 ```
 
 ### Safe Local Rename Rewrite
@@ -54,6 +60,11 @@ Tree-shaking is the process of analyzing code to identify and remove unused expo
 # Inspect rename counts (optionally emit JSON)
 ./target/debug/tsrs-cli minify path/to/module.py --stats
 ./target/debug/tsrs-cli minify path/to/module.py --stats --json
+
+# Preview a unified diff alongside rewritten output
+./target/debug/tsrs-cli minify path/to/module.py --diff
+# Persist stats to disk for later analysis
+./target/debug/tsrs-cli minify path/to/module.py --stats --output-json reports/minify.json
 ```
 
 ### Directory Rewrite
@@ -78,11 +89,22 @@ Tree-shaking is the process of analyzing code to identify and remove unused expo
 
 # Rewrite in place and keep .bak backups of originals
 ./target/debug/tsrs-cli minify-dir ./src --in-place --backup-ext .bak
+
+# Limit the worker pool (defaults to CPU count)
+./target/debug/tsrs-cli minify-dir ./src --jobs 4
+
+# Show diffs for every rewritten file
+./target/debug/tsrs-cli minify-dir ./src --diff
+
+# Write stats to a JSON file for dashboards
+./target/debug/tsrs-cli minify-dir ./src --stats --output-json reports/minify-dir.json
 ```
 
 Each run prints per-file status lines (minified, skipped, bailouts) and summarises the total work. Bailouts copy the original file verbatim so you never lose working code—re-run with `--debug` to inspect why a file could not be safely renamed.
 
 Add `--stats` to include per-file rename counts in the output, and combine it with `--json` for a machine-readable summary of the same data.
+
+All directory commands accept `--jobs <N>` to control the number of Rayon worker threads. When omitted the tool uses the machine's CPU count. They also ignore `.git`, `__pycache__`, and `.venv` directories by default.
 
 ### Plan Bundles
 
@@ -96,8 +118,16 @@ Add `--stats` to include per-file rename counts in the output, and combine it wi
 # Apply in place with backups and detailed stats
 ./target/debug/tsrs-cli apply-plan-dir ./src --plan plan.json --in-place --backup-ext .bak --stats --json
 
+# Include unified diffs while applying a plan bundle
+./target/debug/tsrs-cli apply-plan-dir ./src --plan plan.json --diff
+
+# Capture directory stats to a JSON report while applying a bundle
+./target/debug/tsrs-cli apply-plan-dir ./src --plan plan.json --stats --output-json reports/apply-plan-dir.json
+
 # CI: fail if a rewrite would change files or introduce bailouts
 ./target/debug/tsrs-cli minify-dir ./src --dry-run --fail-on-change --fail-on-bailout
+
+Plan bundles include a `version` field (currently `1`) so future releases can evolve the schema without breaking old plans; tools should validate this field when consuming stored bundles, and the CLI refuses to apply plans whose version exceeds the supported value.
 ```
 
 ## References

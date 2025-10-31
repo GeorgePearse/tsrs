@@ -20,6 +20,8 @@ globset = "0.4"
 regex = "1"
 rayon = "1"
 num_cpus = "1"
+encoding_rs = "0.8"
+similar = "2"
 
 [lib]
 name = "tsrs"
