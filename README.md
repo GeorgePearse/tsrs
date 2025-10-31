@@ -86,6 +86,18 @@ The tool builds a complete picture of your code's dependencies:
 
 This multi-layered approach ensures you don't accidentally remove code that's used through indirect calls or dynamic imports.
 
+### Conservative Approach
+
+**tsrs takes a low-risk, conservative approach to tree-shaking.** It will keep:
+
+- All **global variables and module-level constants** in any package (these may be used externally or through reflection)
+- All **public API surfaces** even if not directly called in your code
+- **Packages you explicitly import**, even if only specific functions are used
+
+This means you won't accidentally break your code by removing something that's used indirectly, through dynamic imports, or as part of a library's public API. The goal is safe dependency reduction, not aggressive dead code elimination.
+
+If you need more aggressive optimization, you can manually inspect the analysis reports and remove packages you know are truly unused.
+
 ## Development
 
 ```bash
