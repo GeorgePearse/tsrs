@@ -87,8 +87,9 @@ impl CallGraphAnalyzer {
         let call_pattern = Regex::new(r"\b([a-zA-Z_][a-zA-Z0-9_\.]*)\s*\(")
             .map_err(|e| TsrsError::ParseError(format!("Failed to compile regex: {}", e)))?;
 
-        let import_pattern = Regex::new(r"^(?:from\s+([a-zA-Z0-9_\.]+)\s+)?import\s+([a-zA-Z0-9_,\s]+)")
-            .map_err(|e| TsrsError::ParseError(format!("Failed to compile regex: {}", e)))?;
+        let import_pattern =
+            Regex::new(r"^(?:from\s+([a-zA-Z0-9_\.]+)\s+)?import\s+([a-zA-Z0-9_,\s]+)")
+                .map_err(|e| TsrsError::ParseError(format!("Failed to compile regex: {}", e)))?;
 
         Ok(CallGraphAnalyzer {
             graphs: HashMap::new(),
@@ -100,15 +101,15 @@ impl CallGraphAnalyzer {
 
     /// Analyze a Python file and build call graph
     pub fn analyze_file<P: AsRef<Path>>(&mut self, path: P, package: &str) -> Result<()> {
-        let source = std::fs::read_to_string(path)
-            .map_err(|e| TsrsError::Io(e))?;
+        let source = std::fs::read_to_string(path).map_err(|e| TsrsError::Io(e))?;
         self.analyze_source(package, &source);
         Ok(())
     }
 
     /// Analyze Python source and extract function definitions and calls
     pub fn analyze_source(&mut self, package: &str, source: &str) {
-        let graph = self.graphs
+        let graph = self
+            .graphs
             .entry(package.to_string())
             .or_insert_with(|| PackageCallGraph::new(package.to_string()));
 
@@ -144,10 +145,7 @@ impl CallGraphAnalyzer {
                         // External call
                         let module = parts[0];
                         let func = parts[1..].join(".");
-                        graph.add_external_call(FunctionRef::new(
-                            module.to_string(),
-                            func,
-                        ));
+                        graph.add_external_call(FunctionRef::new(module.to_string(), func));
                     }
                 }
             }
@@ -168,7 +166,8 @@ impl CallGraphAnalyzer {
     pub fn find_unused_functions(&self, package: &str) -> HashSet<String> {
         if let Some(graph) = self.get_graph(package) {
             let called: HashSet<String> = graph.internal_calls.iter().cloned().collect();
-            graph.definitions
+            graph
+                .definitions
                 .iter()
                 .filter(|def| !called.contains(*def) && !def.starts_with('_'))
                 .cloned()

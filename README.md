@@ -26,6 +26,84 @@ Tree-shaking is the process of analyzing code to identify and remove unused expo
 ./target/debug/tsrs-cli slim <python-directory> <venv-location> -o /path/to/output/.venv-slim
 ```
 
+### Minify Plan Preview
+
+```bash
+# Inspect planned local renames without rewriting code
+./target/debug/tsrs-cli minify-plan path/to/module.py
+
+# Apply a curated plan to a file (prints to stdout by default)
+./target/debug/tsrs-cli apply-plan path/to/module.py --plan plan.json
+
+# Apply in place with a backup and stats
+./target/debug/tsrs-cli apply-plan path/to/module.py --plan plan.json --in-place --backup-ext .bak --stats --json
+```
+
+### Safe Local Rename Rewrite
+
+```bash
+# Emit rewritten source when safe (no nested scopes/imports)
+./target/debug/tsrs-cli minify path/to/module.py
+
+# Rewrite in place (updates the file on disk)
+./target/debug/tsrs-cli minify path/to/module.py --in-place
+
+# Keep a .bak backup before rewriting in place
+./target/debug/tsrs-cli minify path/to/module.py --in-place --backup-ext .bak
+
+# Inspect rename counts (optionally emit JSON)
+./target/debug/tsrs-cli minify path/to/module.py --stats
+./target/debug/tsrs-cli minify path/to/module.py --stats --json
+```
+
+### Directory Rewrite
+
+```bash
+# Mirror ./src into ./src-min with minified modules
+./target/debug/tsrs-cli minify-dir ./src
+
+# Write into a custom output directory
+./target/debug/tsrs-cli minify-dir ./src --out-dir ./dist/min
+
+# Only minify application code, skip tests
+./target/debug/tsrs-cli minify-dir ./project \
+  --include "project/**" \
+  --exclude "project/tests/**"
+
+# Preview changes without writing files
+./target/debug/tsrs-cli minify-dir ./src --dry-run
+
+# Rewrite files in place (no mirror directory)
+./target/debug/tsrs-cli minify-dir ./src --in-place
+
+# Rewrite in place and keep .bak backups of originals
+./target/debug/tsrs-cli minify-dir ./src --in-place --backup-ext .bak
+```
+
+Each run prints per-file status lines (minified, skipped, bailouts) and summarises the total work. Bailouts copy the original file verbatim so you never lose working code—re-run with `--debug` to inspect why a file could not be safely renamed.
+
+Add `--stats` to include per-file rename counts in the output, and combine it with `--json` for a machine-readable summary of the same data.
+
+### Plan Bundles
+
+```bash
+# Create a directory-wide plan bundle
+./target/debug/tsrs-cli minify-plan-dir ./src --out plan.json
+
+# Apply the bundle to a mirrored output tree
+./target/debug/tsrs-cli apply-plan-dir ./src --plan plan.json --out-dir ./src-min
+
+# Apply in place with backups and detailed stats
+./target/debug/tsrs-cli apply-plan-dir ./src --plan plan.json --in-place --backup-ext .bak --stats --json
+```
+
+## References
+
+- [pyminifier (liftoffsoftware)](https://github.com/liftoff/pyminifier)
+- [TreeShaker (sclabs)](https://github.com/sclabs/treeshaker)
+- [“Build a Python tree-shaker in Rust” (dev.to)](https://dev.to/georgepearse/build-a-python-tree-shaker-in-rust-2n4h)
+- [“Crude Python tree-shaking for squeezing into AWS Lambda package size limits” (sam152)](https://dev.to/sam152/crude-python-tree-shaking-for-squeezing-into-aws-lambda-package-size-limits-357a)
+
 ### How it Works
 
 1. **Scans the Python code directory** for all import statements

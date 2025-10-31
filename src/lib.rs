@@ -1,13 +1,15 @@
-pub mod venv;
-pub mod imports;
-pub mod slim;
-pub mod error;
 pub mod callgraph;
+pub mod error;
+pub mod imports;
+pub mod minify;
+pub mod slim;
+pub mod venv;
 
-pub use venv::{VenvAnalyzer, VenvInfo};
+pub use callgraph::{CallGraphAnalyzer, FunctionRef, PackageCallGraph};
 pub use imports::{ImportCollector, ImportSet};
+pub use minify::{FunctionPlan as MinifyFunctionPlan, Minifier, MinifyPlan, RenameEntry};
 pub use slim::VenvSlimmer;
-pub use callgraph::{CallGraphAnalyzer, PackageCallGraph, FunctionRef};
+pub use venv::{VenvAnalyzer, VenvInfo};
 
 #[cfg(feature = "python-extension")]
 use pyo3::prelude::*;
@@ -43,7 +45,9 @@ impl PyVenvAnalyzer {
     }
 
     fn analyze(&self) -> PyResult<String> {
-        let info = self.analyzer.analyze()
+        let info = self
+            .analyzer
+            .analyze()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         Ok(serde_json::to_string(&info)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?)
@@ -67,7 +71,8 @@ impl PyVenvSlimmer {
     }
 
     fn slim(&self) -> PyResult<String> {
-        self.slimmer.slim()
+        self.slimmer
+            .slim()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
         Ok("Slim venv created successfully".to_string())
     }

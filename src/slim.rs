@@ -21,19 +21,22 @@ impl VenvSlimmer {
         let source = source_venv.as_ref().to_path_buf();
 
         if !code_dir.exists() {
-            return Err(TsrsError::InvalidVenvPath(
-                format!("Code directory does not exist: {}", code_dir.display()),
-            ));
+            return Err(TsrsError::InvalidVenvPath(format!(
+                "Code directory does not exist: {}",
+                code_dir.display()
+            )));
         }
 
         if !source.exists() {
-            return Err(TsrsError::InvalidVenvPath(
-                format!("Source venv does not exist: {}", source.display()),
-            ));
+            return Err(TsrsError::InvalidVenvPath(format!(
+                "Source venv does not exist: {}",
+                source.display()
+            )));
         }
 
         // Default output is .venv-slim next to the source venv
-        let mut output = source.parent()
+        let mut output = source
+            .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
         output.push(".venv-slim");
@@ -56,15 +59,17 @@ impl VenvSlimmer {
         let output = output_venv.as_ref().to_path_buf();
 
         if !code_dir.exists() {
-            return Err(TsrsError::InvalidVenvPath(
-                format!("Code directory does not exist: {}", code_dir.display()),
-            ));
+            return Err(TsrsError::InvalidVenvPath(format!(
+                "Code directory does not exist: {}",
+                code_dir.display()
+            )));
         }
 
         if !source.exists() {
-            return Err(TsrsError::InvalidVenvPath(
-                format!("Source venv does not exist: {}", source.display()),
-            ));
+            return Err(TsrsError::InvalidVenvPath(format!(
+                "Source venv does not exist: {}",
+                source.display()
+            )));
         }
 
         Ok(VenvSlimmer {
@@ -90,7 +95,10 @@ impl VenvSlimmer {
         let mut import_collector = ImportCollector::new();
         self.collect_imports_from_code(&mut import_collector)?;
         let used_imports = import_collector.get_imports();
-        tracing::info!("Found {} unique imports in code", used_imports.imports.len());
+        tracing::info!(
+            "Found {} unique imports in code",
+            used_imports.imports.len()
+        );
 
         // Create base structure
         self.create_venv_structure()?;
@@ -161,7 +169,7 @@ impl VenvSlimmer {
         // Copy each used package
         for package in &venv_info.packages {
             let package_name = package.name.split('-').next().unwrap_or(&package.name);
-            
+
             if used_imports.imports.contains(package_name) {
                 let src = &package.path;
                 let dst = dst_site_packages.join(&package.name);
@@ -201,10 +209,13 @@ impl VenvSlimmer {
     fn find_or_create_site_packages(&self, venv_path: &Path) -> Result<PathBuf> {
         // Copy the Python version from source
         let src_site_packages = self.find_site_packages(&self.source_venv)?;
-        let python_dir = src_site_packages.parent()
+        let python_dir = src_site_packages
+            .parent()
             .and_then(|p| p.file_name())
             .and_then(|n| Some(n.to_string_lossy().to_string()))
-            .ok_or_else(|| TsrsError::InvalidVenvPath("Could not determine Python version".to_string()))?;
+            .ok_or_else(|| {
+                TsrsError::InvalidVenvPath("Could not determine Python version".to_string())
+            })?;
 
         let lib_path = venv_path.join("lib");
         fs::create_dir_all(&lib_path)?;

@@ -97,7 +97,11 @@ impl VenvAnalyzer {
         for entry in std::fs::read_dir(site_packages)? {
             let entry = entry?;
             let path = entry.path();
-            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
 
             // Skip special directories
             if name.starts_with("_") || name.starts_with(".") || name == "dist-info" {
@@ -138,10 +142,7 @@ impl VenvAnalyzer {
         let lib_path = self.venv_path.join("lib");
         if let Ok(entries) = std::fs::read_dir(&lib_path) {
             for entry in entries.flatten() {
-                let name = entry
-                    .file_name()
-                    .to_string_lossy()
-                    .to_string();
+                let name = entry.file_name().to_string_lossy().to_string();
                 if name.starts_with("python") {
                     return Some(name);
                 }

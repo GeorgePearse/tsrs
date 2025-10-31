@@ -16,6 +16,7 @@ thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
+globset = "0.4"
 regex = "1"
 
 [lib]
@@ -29,3 +30,6 @@ path = "src/bin/cli.rs"
 [features]
 default = []
 python-extension = ["pyo3", "pyo3?/extension-module"]
+
+[dev-dependencies]
+tempfile = "3"
