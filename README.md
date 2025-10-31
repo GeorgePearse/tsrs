@@ -86,17 +86,23 @@ The tool builds a complete picture of your code's dependencies:
 
 This multi-layered approach ensures you don't accidentally remove code that's used through indirect calls or dynamic imports.
 
-### Conservative Approach
+### High Precision, Low Recall Philosophy
 
-**tsrs takes a low-risk, conservative approach to tree-shaking.** It will keep:
+**tsrs prioritizes precision over recall in dead code detection:**
+
+- **High Precision**: When we flag something as dead/unused, it almost certainly is
+- **Low Recall**: We're happy to miss dead code - better conservative than aggressive
+
+We will keep:
 
 - All **global variables and module-level constants** in any package (these may be used externally or through reflection)
 - All **public API surfaces** even if not directly called in your code
 - **Packages you explicitly import**, even if only specific functions are used
+- Any code that **could potentially be used** (even indirectly)
 
-This means you won't accidentally break your code by removing something that's used indirectly, through dynamic imports, or as part of a library's public API. The goal is safe dependency reduction, not aggressive dead code elimination.
+The philosophy: **It's better to leave in unused code than to accidentally break something that's actually used through indirect calls, dynamic imports, reflection, or a library's public API.**
 
-If you need more aggressive optimization, you can manually inspect the analysis reports and remove packages you know are truly unused.
+We're optimizing for **correctness over comprehensiveness** - we'd rather miss some dead code than introduce false positives that break your application.
 
 ## Development
 
