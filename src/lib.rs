@@ -2,10 +2,12 @@ pub mod venv;
 pub mod imports;
 pub mod slim;
 pub mod error;
+pub mod callgraph;
 
 pub use venv::{VenvAnalyzer, VenvInfo};
 pub use imports::{ImportCollector, ImportSet};
 pub use slim::VenvSlimmer;
+pub use callgraph::{CallGraphAnalyzer, PackageCallGraph, FunctionRef};
 
 #[cfg(feature = "python-extension")]
 use pyo3::prelude::*;
