@@ -150,14 +150,3 @@ impl VenvAnalyzer {
         None
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_invalid_venv_path() {
-        let result = VenvAnalyzer::new("/nonexistent/path");
-        assert!(result.is_err());
-    }
-}

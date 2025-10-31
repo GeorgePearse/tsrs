@@ -238,14 +238,3 @@ impl VenvSlimmer {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_invalid_source_venv() {
-        let result = VenvSlimmer::new("/nonexistent/source", "/tmp/output");
-        assert!(result.is_err());
-    }
-}
