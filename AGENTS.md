@@ -6,8 +6,10 @@
 
 - **Project Overview**: See section "Project Overview" below
 - **Architecture**: See "Code Architecture & Module Responsibilities"
+- **Website Structure**: See "Website & Documentation Structure"
 - **Testing**: See "Testing Strategy & Coverage Map"
 - **Making Changes**: See "Development Workflow" and "Common Patterns"
+- **File Organization**: See "File Organization & Where to Find Things"
 - **Known Issues**: See "Current State & Known Limitations"
 
 ---
@@ -831,6 +833,103 @@ RUST_LOG=tsrs=trace,rustpython=off        # Selective logging
 
 ---
 
+## Website & Documentation Structure
+
+### Build System
+
+The project uses **MkDocs** with the **Material theme** to generate static documentation. The build process is configured in `mkdocs.yml` at the root of the repository.
+
+**Key Configuration**:
+- **Theme**: Material for MkDocs (provides modern styling and navigation)
+- **Site URL**: https://georgepearse.github.io/tsrs/
+- **Source Files**: `docs/` directory (markdown files)
+- **Output**: `site/` directory (generated HTML, committed to repo for GitHub Pages)
+- **Python Extensions**: pymdownx (highlight, superfences, inlinehilite), tables, admonition
+
+### Documentation Source Files
+
+```
+docs/
+├── README.md                    # Home page (project overview & usage)
+├── AGENTS.md                    # AI agent guidance (this file, in docs/ too)
+├── ALTERNATIVE_APPROACHES.md    # Design alternatives & rationale
+├── API.md                       # Library API reference
+├── CHANGELOG.md                 # Release notes & version history
+├── CONTRIBUTING.md              # Contribution guidelines
+├── MINIFY_DESIGN.md            # Algorithm specification & scope rules
+├── TESTING.md                   # Test infrastructure & strategies
+└── TEST_REPOS_SUMMARY.md        # Summary of test repositories
+```
+
+### Generated Website Structure
+
+```
+site/
+├── index.html                   # Homepage (built from docs/README.md)
+├── AGENTS/index.html            # Architecture guide
+├── ALTERNATIVE_APPROACHES/index.html  # Design alternatives
+├── API/index.html               # API reference
+├── CHANGELOG/index.html         # Release notes
+├── CONTRIBUTING/index.html      # Contributing guide
+├── MINIFY_DESIGN/index.html     # Minification design
+├── TESTING/index.html           # Testing guide
+├── TEST_REPOS_SUMMARY/index.html # Test repo summary
+├── search/                      # Search index (auto-generated)
+├── assets/
+│   ├── stylesheets/            # CSS (Material theme)
+│   ├── javascripts/             # JS (Material theme + search)
+│   └── images/                  # Images and favicon
+├── sitemap.xml                  # SEO sitemap
+└── 404.html                     # 404 error page
+```
+
+### Navigation Structure
+
+The site navigation (from `mkdocs.yml`) is organized as:
+- **Home**: README.md (landing page)
+- **Getting Started**:
+  - Contributing: CONTRIBUTING.md
+  - Testing: TESTING.md
+- **Documentation**:
+  - API Reference: API.md
+  - Minification Design: MINIFY_DESIGN.md
+  - Test Repositories: TEST_REPOS_SUMMARY.md
+- **Architecture & Design**:
+  - Architecture Guide: AGENTS.md
+  - Alternative Approaches: ALTERNATIVE_APPROACHES.md
+- **Release Notes**:
+  - Changelog: CHANGELOG.md
+
+### Building & Deploying
+
+**Install dependencies**:
+```bash
+pip install mkdocs mkdocs-material
+```
+
+**Build the site locally** (regenerates `site/` directory):
+```bash
+mkdocs build
+```
+
+**Serve locally** (preview at http://localhost:8000):
+```bash
+mkdocs serve
+```
+
+**Deployment**:
+The `site/` directory is committed to the repository and served via GitHub Pages. To deploy:
+1. Update markdown files in `docs/`
+2. Run `mkdocs build` to regenerate `site/`
+3. Commit both the source changes and the updated `site/` directory
+4. Push to `origin/master` (GitHub Actions or manual deployment)
+
+**GitHub Pages Configuration** (from repo settings):
+- Source: `master` branch, `/` root directory (or `/docs` folder depending on setup)
+- Custom domain: None (uses `georgepearse.github.io/tsrs/`)
+
+---
+
 ## File Organization & Where to Find Things
 
 ### Source Code Structure
@@ -854,12 +953,9 @@ test_packages/
 ├── test_minify/           # Minification test samples
 └── test_slim_packages/    # 16 import pattern tests
 
-docs/
-├── README.md              # User-facing overview
-├── MINIFY_DESIGN.md       # Algorithm specification
-├── TESTING.md             # Test infrastructure guide
-├── CONTRIBUTING.md        # Contribution guidelines
-└── API.md                 # Library API documentation
+mkdocs.yml                  # Documentation build configuration
+docs/                       # Documentation source (markdown)
+site/                       # Generated documentation (HTML, published)
 ```
 
 ### Where to Find Specific Things
