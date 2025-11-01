@@ -1072,7 +1072,10 @@ fn optimize(
     quiet: bool,
 ) -> anyhow::Result<()> {
     let output_dir = output.unwrap_or_else(|| {
-        let mut path = code_dir.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
+        let mut path = code_dir
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf();
         path.push("tsrs-optimized");
         path
     });
@@ -1208,13 +1211,24 @@ fn optimize(
             let report = tsrs::DeadCodeReport::new(
                 "root".to_string(),
                 reachable_count + dead_code.len(),
-                dead_code.iter().map(|(_, name)| (name.clone(), "Unreachable from entry points".to_string())).collect(),
-                analyzer.compute_reachable().iter().map(|_| "live".to_string()).collect::<Vec<_>>()
+                dead_code
+                    .iter()
+                    .map(|(_, name)| (name.clone(), "Unreachable from entry points".to_string()))
+                    .collect(),
+                analyzer
+                    .compute_reachable()
+                    .iter()
+                    .map(|_| "live".to_string())
+                    .collect::<Vec<_>>()
                     .into_iter()
                     .zip(std::iter::repeat(""))
                     .map(|(s, _)| s)
                     .collect::<Vec<_>>(),
-                analyzer.get_entry_points().iter().map(|_| "entry".to_string()).collect::<Vec<_>>()
+                analyzer
+                    .get_entry_points()
+                    .iter()
+                    .map(|_| "entry".to_string())
+                    .collect::<Vec<_>>()
                     .into_iter()
                     .zip(std::iter::repeat(""))
                     .map(|(s, _)| s)
@@ -1240,7 +1254,10 @@ fn optimize(
             let report = tsrs::DeadCodeReport::new(
                 "root".to_string(),
                 reachable_count + dead_code.len(),
-                dead_code.iter().map(|(_, name)| (name.clone(), "Unreachable from entry points".to_string())).collect(),
+                dead_code
+                    .iter()
+                    .map(|(_, name)| (name.clone(), "Unreachable from entry points".to_string()))
+                    .collect(),
                 vec![],
                 vec![],
                 vec![],
@@ -1278,7 +1295,11 @@ fn minify_plan(file_path: &PathBuf) -> anyhow::Result<()> {
 }
 
 /// Detect and report dead code in Python source
-fn detect_dead_code(source: &str, package_name: &str, quiet: bool) -> anyhow::Result<Vec<(usize, String)>> {
+fn detect_dead_code(
+    source: &str,
+    package_name: &str,
+    quiet: bool,
+) -> anyhow::Result<Vec<(usize, String)>> {
     let mut analyzer = CallGraphAnalyzer::new();
     analyzer.analyze_source(package_name, source)?;
 
@@ -1303,15 +1324,13 @@ fn detect_dead_code(source: &str, package_name: &str, quiet: bool) -> anyhow::Re
 /// Filter a MinifyPlan to exclude dead code functions
 fn filter_plan_for_dead_code(mut plan: MinifyPlan, dead_code: &[(usize, String)]) -> MinifyPlan {
     // Create set of dead function names for fast lookup
-    let dead_names: HashSet<&str> = dead_code
-        .iter()
-        .map(|(_, name)| name.as_str())
-        .collect();
+    let dead_names: HashSet<&str> = dead_code.iter().map(|(_, name)| name.as_str()).collect();
 
     // Filter functions: remove those that are dead code
     plan.functions.retain(|func| {
         // Extract simple name from qualified_name (last component after .)
-        let simple_name = func.qualified_name
+        let simple_name = func
+            .qualified_name
             .split('.')
             .last()
             .unwrap_or(&func.qualified_name);
@@ -1896,7 +1915,7 @@ fn minify_file(
         diff,
         diff_context,
         force_stdout,
-        false,  // remove_dead_code defaults to false
+        false, // remove_dead_code defaults to false
     )
 }
 

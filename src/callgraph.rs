@@ -163,6 +163,9 @@ pub struct CallGraphAnalyzer {
     entry_points: HashSet<FunctionId>,
     /// Public API exports from each package
     public_exports: HashMap<String, HashSet<String>>,
+    /// Import tracking: (package, local_name) → (source_package, source_function)
+    /// Maps how functions are imported from other packages
+    imports: HashMap<(String, String), (String, String)>,
 }
 
 impl CallGraphAnalyzer {
@@ -177,6 +180,7 @@ impl CallGraphAnalyzer {
             function_index: HashMap::new(),
             entry_points: HashSet::new(),
             public_exports: HashMap::new(),
+            imports: HashMap::new(),
         }
     }
 
@@ -249,9 +253,10 @@ impl CallGraphAnalyzer {
         let suite = ast::Suite::parse(source, "<source>")
             .map_err(|e| TsrsError::ParseError(format!("Failed to parse Python: {e}")))?;
 
-        // First pass: detect exports and entry points from module level
+        // First pass: detect exports, entry points, and imports from module level
         self.detect_module_exports(package, &suite)?;
         self.detect_main_block(&suite)?;
+        self.extract_imports(package, &suite)?;
 
         // Second pass: register all functions
         self.register_module_functions_suite(package, &suite)?;
@@ -321,6 +326,76 @@ impl CallGraphAnalyzer {
                 }
             }
             _ => {}
+        }
+        Ok(())
+    }
+
+    /// Extract imports from module-level statements
+    /// Populates the imports map to track cross-package function usage
+    fn extract_imports(&mut self, package: &str, suite: &[ast::Stmt]) -> Result<()> {
+        for stmt in suite {
+            match stmt {
+                // Handle: import module, import module as alias, import m1, m2
+                ast::Stmt::Import(import) => {
+                    for alias in &import.names {
+                        let module_name = alias.name.as_str();
+                        // Get the binding name (what it's called in this package)
+                        let binding_name = if let Some(asname) = &alias.asname {
+                            asname.as_str()
+                        } else {
+                            // For `import X.Y.Z`, binding name is `X`
+                            module_name.split('.').next().unwrap_or(module_name)
+                        };
+
+                        // Map: (package, binding_name) → (module_name, module_name)
+                        // This represents: from module_name import module_name
+                        self.add_import(
+                            package.to_string(),
+                            binding_name.to_string(),
+                            module_name.to_string(),
+                            module_name.to_string(),
+                        );
+                    }
+                }
+                // Handle: from module import name, from module import name as alias, from module import *
+                ast::Stmt::ImportFrom(import_from) => {
+                    let source_module = if let Some(module) = &import_from.module {
+                        module.as_str()
+                    } else {
+                        // Relative imports - we'll skip these for now
+                        continue;
+                    };
+
+                    // Check for wildcard imports (we'll skip detailed tracking for these)
+                    let has_wildcard = import_from
+                        .names
+                        .iter()
+                        .any(|alias| alias.name.as_str() == "*");
+                    if has_wildcard {
+                        continue;
+                    }
+
+                    // Process each imported name
+                    for alias in &import_from.names {
+                        let imported_name = alias.name.as_str();
+                        let binding_name = if let Some(asname) = &alias.asname {
+                            asname.as_str()
+                        } else {
+                            imported_name
+                        };
+
+                        // Map: (package, binding_name) → (source_module, imported_name)
+                        // This represents: from source_module import imported_name [as binding_name]
+                        self.add_import(
+                            package.to_string(),
+                            binding_name.to_string(),
+                            source_module.to_string(),
+                            imported_name.to_string(),
+                        );
+                    }
+                }
+                _ => {}
+            }
         }
         Ok(())
     }
@@ -827,6 +902,69 @@ impl CallGraphAnalyzer {
             })
             .collect()
     }
+
+    /// Add an import mapping
+    /// Maps (package, local_name) → (source_package, source_function)
+    /// Example: Package "myapp" imports "helper" from "mylib"
+    /// This maps ("myapp", "helper") → ("mylib", "helper")
+    pub fn add_import(
+        &mut self,
+        package: String,
+        local_name: String,
+        source_package: String,
+        source_function: String,
+    ) {
+        self.imports
+            .insert((package, local_name), (source_package, source_function));
+    }
+
+    /// Resolve a call name to its actual function (local or imported)
+    /// Returns Some((source_package, source_function)) if found, None otherwise
+    ///
+    /// Resolution order:
+    /// 1. Check if call_name is a local function in package
+    /// 2. Check if it's an imported function
+    /// 3. Return None
+    fn resolve_call(&self, package: &str, call_name: &str) -> Option<(String, String)> {
+        // First check if it's a local function in this package
+        if self
+            .function_index
+            .contains_key(&(package.to_string(), call_name.to_string()))
+        {
+            return Some((package.to_string(), call_name.to_string()));
+        }
+
+        // Check if it's an imported function
+        self.imports
+            .get(&(package.to_string(), call_name.to_string()))
+            .cloned()
+    }
+
+    /// Get all imports for a package
+    /// Returns list of (local_name, source_package, source_function) tuples
+    pub fn get_imports_for_package(&self, package: &str) -> Vec<(String, String, String)> {
+        self.imports
+            .iter()
+            .filter(|((pkg, _), _)| pkg == package)
+            .map(|((_, local_name), (source_pkg, source_func))| {
+                (local_name.clone(), source_pkg.clone(), source_func.clone())
+            })
+            .collect()
+    }
+
+    /// Get all imports across all packages
+    pub fn get_all_imports(&self) -> HashMap<String, Vec<(String, String, String)>> {
+        let mut result: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
+
+        for ((package, local_name), (source_pkg, source_func)) in &self.imports {
+            result
+                .entry(package.clone())
+                .or_insert_with(Vec::new)
+                .push((local_name.clone(), source_pkg.clone(), source_func.clone()));
+        }
+
+        result
+    }
 }
 
 impl Default for CallGraphAnalyzer {
@@ -857,7 +995,10 @@ if __name__ == "__main__":
 
         let entry_points = analyzer.get_entry_points();
         // At minimum, test_something should be an entry point
-        assert!(!entry_points.is_empty(), "Should have entry point for test function");
+        assert!(
+            !entry_points.is_empty(),
+            "Should have entry point for test function"
+        );
     }
 
     #[test]
@@ -1167,10 +1308,7 @@ if __name__ == "__main__":
             })
             .count();
 
-        assert!(
-            call_count >= 3,
-            "Should detect all three calls to target"
-        );
+        assert!(call_count >= 3, "Should detect all three calls to target");
     }
 
     #[test]
@@ -1183,7 +1321,10 @@ if __name__ == "__main__":
         assert!(nodes.is_empty(), "Empty source should have no nodes");
 
         let dead_code = analyzer.find_dead_code();
-        assert!(dead_code.is_empty(), "Empty source should have no dead code");
+        assert!(
+            dead_code.is_empty(),
+            "Empty source should have no dead code"
+        );
     }
 
     #[test]
@@ -1199,7 +1340,10 @@ if __name__ == "__main__":
         analyzer.analyze_source("test", source).unwrap();
 
         let nodes = analyzer.get_nodes();
-        assert!(nodes.is_empty(), "Comments and docstrings should not create nodes");
+        assert!(
+            nodes.is_empty(),
+            "Comments and docstrings should not create nodes"
+        );
     }
 
     #[test]
@@ -1278,15 +1422,9 @@ def decorated_func():
         analyzer.analyze_source("test", source).unwrap();
 
         let nodes = analyzer.get_nodes();
-        let decorated = nodes
-            .values()
-            .find(|n| n.name == "decorated_func")
-            .unwrap();
+        let decorated = nodes.values().find(|n| n.name == "decorated_func").unwrap();
 
-        assert!(
-            !decorated.decorators.is_empty(),
-            "Should track decorators"
-        );
+        assert!(!decorated.decorators.is_empty(), "Should track decorators");
     }
 
     #[test]
@@ -1317,5 +1455,116 @@ if __name__ == "__main__":
             func_names.contains(&"caller"),
             "Should detect caller function"
         );
+    }
+
+    #[test]
+    fn test_import_tracking_from_import() {
+        let source = r#"
+from mylib import helper
+from utils import process as p
+
+def main():
+    helper()
+    p()
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("myapp", source).unwrap();
+
+        // Check that imports were tracked
+        let imports = analyzer.get_imports_for_package("myapp");
+
+        // Should have 2 imports
+        assert_eq!(imports.len(), 2, "Should track 2 imports");
+
+        // Check specific imports
+        let helper_import = imports.iter().find(|(local, _, _)| local == "helper");
+        assert!(helper_import.is_some(), "Should track 'helper' import");
+
+        if let Some((_, source_pkg, source_func)) = helper_import {
+            assert_eq!(source_pkg, "mylib");
+            assert_eq!(source_func, "helper");
+        }
+
+        let p_import = imports.iter().find(|(local, _, _)| local == "p");
+        assert!(p_import.is_some(), "Should track 'p' import (alias)");
+
+        if let Some((_, source_pkg, source_func)) = p_import {
+            assert_eq!(source_pkg, "utils");
+            assert_eq!(source_func, "process");
+        }
+    }
+
+    #[test]
+    fn test_import_tracking_import_statement() {
+        let source = r#"
+import numpy as np
+import os
+
+def main():
+    np.array([1, 2, 3])
+    os.path.exists('/')
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("myapp", source).unwrap();
+
+        let imports = analyzer.get_imports_for_package("myapp");
+
+        // Should have 2 imports
+        assert_eq!(imports.len(), 2, "Should track 2 imports");
+
+        // Check numpy alias
+        let np_import = imports.iter().find(|(local, _, _)| local == "np");
+        assert!(np_import.is_some(), "Should track 'np' import (alias)");
+
+        if let Some((_, source_pkg, source_func)) = np_import {
+            assert_eq!(source_pkg, "numpy");
+            assert_eq!(source_func, "numpy");
+        }
+
+        // Check os import
+        let os_import = imports.iter().find(|(local, _, _)| local == "os");
+        assert!(os_import.is_some(), "Should track 'os' import");
+
+        if let Some((_, source_pkg, source_func)) = os_import {
+            assert_eq!(source_pkg, "os");
+            assert_eq!(source_func, "os");
+        }
+    }
+
+    #[test]
+    fn test_import_tracking_multiple_packages() {
+        let pkg_a = r#"
+from pkg_b import helper
+
+def main():
+    helper()
+"#;
+
+        let pkg_b = r#"
+def helper():
+    pass
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("pkg_a", pkg_a).unwrap();
+        analyzer.analyze_source("pkg_b", pkg_b).unwrap();
+
+        // Check imports in pkg_a
+        let imports_a = analyzer.get_imports_for_package("pkg_a");
+        assert_eq!(imports_a.len(), 1, "pkg_a should have 1 import");
+
+        let helper = imports_a.iter().find(|(local, _, _)| local == "helper");
+        assert!(helper.is_some());
+
+        if let Some((_, source_pkg, source_func)) = helper {
+            assert_eq!(source_pkg, "pkg_b");
+            assert_eq!(source_func, "helper");
+        }
+
+        // Check no imports in pkg_b
+        let imports_b = analyzer.get_imports_for_package("pkg_b");
+        assert_eq!(imports_b.len(), 0, "pkg_b should have no imports");
     }
 }
