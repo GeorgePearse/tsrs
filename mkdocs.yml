@@ -29,6 +29,7 @@ nav:
     - Testing: TESTING.md
   - Documentation:
     - API Reference: API.md
+    - Implementation Guide: IMPLEMENTATION_GUIDE.md
     - Minification Design: MINIFY_DESIGN.md
     - Test Repositories: TEST_REPOS_SUMMARY.md
   - Architecture & Design:
