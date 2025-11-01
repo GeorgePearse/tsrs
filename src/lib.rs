@@ -2,12 +2,14 @@ pub mod callgraph;
 pub mod error;
 pub mod imports;
 pub mod minify;
+pub mod reporting;
 pub mod slim;
 pub mod venv;
 
 pub use callgraph::{CallGraphAnalyzer, FunctionRef, PackageCallGraph};
 pub use imports::{ImportCollector, ImportSet};
 pub use minify::{FunctionPlan as MinifyFunctionPlan, Minifier, MinifyPlan, RenameEntry};
+pub use reporting::{CallGraphDot, DeadCodeReport, DeadFunction};
 pub use slim::VenvSlimmer;
 pub use venv::{VenvAnalyzer, VenvInfo};
 

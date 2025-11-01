@@ -36,6 +36,7 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::filter::EnvFilter;
 use tsrs::{CallGraphAnalyzer, Minifier, MinifyPlan, VenvAnalyzer, VenvSlimmer};
+use walkdir;
 
 const DEFAULT_EXCLUDES: &[&str] = &["**/.git/**", "**/__pycache__/**", "**/.venv/**"];
 
@@ -464,6 +465,53 @@ enum Commands {
         #[arg(long)]
         remove_dead_code: bool,
     },
+
+    /// End-to-end optimization: analyze code, detect dead code, create slim venv, and minify
+    Optimize {
+        /// Path to the Python code directory to analyze
+        #[arg(value_name = "CODE_DIR")]
+        code_dir: PathBuf,
+
+        /// Path to the source virtual environment
+        #[arg(value_name = "VENV_PATH")]
+        venv_path: PathBuf,
+
+        /// Output directory for optimized code and slim venv
+        #[arg(long, value_name = "OUTPUT_DIR")]
+        output: Option<PathBuf>,
+
+        /// Create slim venv in OUTPUT_DIR/.venv-slim (default: true)
+        #[arg(long)]
+        create_slim_venv: bool,
+
+        /// Create minified code in OUTPUT_DIR/src-minified (default: true)
+        #[arg(long)]
+        minify_code: bool,
+
+        /// Generate dead code reports (JSON, HTML, DOT)
+        #[arg(long)]
+        generate_reports: bool,
+
+        /// Output directory for reports (default: OUTPUT_DIR/reports)
+        #[arg(long, value_name = "REPORTS_DIR")]
+        reports_dir: Option<PathBuf>,
+
+        /// Print dead code report to stdout
+        #[arg(long)]
+        print_report: bool,
+
+        /// Print summary statistics
+        #[arg(long)]
+        stats: bool,
+
+        /// Limit parallel workers
+        #[arg(long, value_name = "N")]
+        jobs: Option<usize>,
+
+        /// Dry run without making changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -863,6 +911,34 @@ fn main() -> anyhow::Result<()> {
                 process::exit(code);
             }
         }
+        Commands::Optimize {
+            code_dir,
+            venv_path,
+            output,
+            create_slim_venv,
+            minify_code,
+            generate_reports,
+            reports_dir,
+            print_report,
+            stats,
+            jobs,
+            dry_run,
+        } => {
+            optimize(
+                &code_dir,
+                &venv_path,
+                output,
+                create_slim_venv,
+                minify_code,
+                generate_reports,
+                reports_dir,
+                print_report,
+                stats,
+                jobs,
+                dry_run,
+                cli.quiet,
+            )?;
+        }
         Commands::ApplyPlanDir {
             input_dir,
             plan,
@@ -977,6 +1053,211 @@ fn slim(code_path: &PathBuf, venv_path: &PathBuf, output: Option<PathBuf>) -> an
 
     println!("\nSlim venv created successfully!");
     println!("Output: {}", output_path.display());
+
+    Ok(())
+}
+
+fn optimize(
+    code_dir: &PathBuf,
+    venv_path: &PathBuf,
+    output: Option<PathBuf>,
+    create_slim_venv: bool,
+    minify_code: bool,
+    generate_reports: bool,
+    reports_dir: Option<PathBuf>,
+    print_report: bool,
+    stats: bool,
+    jobs: Option<usize>,
+    dry_run: bool,
+    quiet: bool,
+) -> anyhow::Result<()> {
+    let output_dir = output.unwrap_or_else(|| {
+        let mut path = code_dir.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
+        path.push("tsrs-optimized");
+        path
+    });
+
+    if !quiet {
+        println!("🔍 TSRS End-to-End Optimization");
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("📁 Code directory: {}", code_dir.display());
+        println!("📦 Virtual environment: {}", venv_path.display());
+        println!("📍 Output directory: {}", output_dir.display());
+        println!();
+    }
+
+    // Step 1: Analyze imports and build call graph
+    if !quiet {
+        println!("Step 1: Analyzing code structure...");
+    }
+
+    let mut analyzer = CallGraphAnalyzer::new();
+
+    // Scan all Python files and build call graph
+    for entry in walkdir::WalkDir::new(code_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("py"))
+    {
+        if let Ok((source, _)) = read_python(entry.path()) {
+            let package = entry
+                .path()
+                .strip_prefix(code_dir)
+                .ok()
+                .and_then(|p| p.parent())
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "root".to_string());
+
+            let _ = analyzer.analyze_source(&package, &source);
+        }
+    }
+
+    let dead_code = analyzer.find_dead_code();
+    let reachable_count = analyzer.compute_reachable().len();
+
+    if !quiet && !dead_code.is_empty() {
+        println!("  ✓ Found {} dead functions", dead_code.len());
+    }
+    if !quiet {
+        println!("  ✓ {} reachable functions", reachable_count);
+    }
+
+    // Step 2: Create slim venv if requested
+    if create_slim_venv {
+        if !quiet {
+            println!("\nStep 2: Creating slim virtual environment...");
+        }
+
+        let slim_venv_path = output_dir.join(".venv-slim");
+
+        if !dry_run {
+            if !output_dir.exists() {
+                fs::create_dir_all(&output_dir)?;
+            }
+            let slimmer = VenvSlimmer::new_with_output(code_dir, venv_path, &slim_venv_path)?;
+            slimmer.slim()?;
+        }
+
+        if !quiet {
+            println!("  ✓ Slim venv created");
+        }
+    }
+
+    // Step 3: Minify code if requested
+    if minify_code {
+        if !quiet {
+            println!("\nStep 3: Minifying code...");
+        }
+
+        let minified_dir = output_dir.join("src-minified");
+
+        if !dry_run {
+            let includes = vec!["**/*.py".to_string()];
+            minify_dir_with_depth(
+                code_dir,
+                Some(minified_dir.clone()),
+                &includes,
+                None,
+                &[],
+                None,
+                None,
+                false,
+                dry_run,
+                stats,
+                false,
+                false,
+                false,
+                None,
+                quiet,
+                None,
+                jobs,
+                false,
+                false,
+                false,
+                false,
+                0,
+                false,
+                None,
+                true,
+            )?;
+        }
+
+        if !quiet {
+            println!("  ✓ Code minified");
+        }
+    }
+
+    // Step 4: Generate reports if requested
+    if generate_reports || print_report {
+        if !quiet {
+            println!("\nStep 4: Generating reports...");
+        }
+
+        let report_dir = reports_dir.unwrap_or_else(|| output_dir.join("reports"));
+
+        if !dry_run && generate_reports {
+            fs::create_dir_all(&report_dir)?;
+
+            // Create dead code report
+            let exports = analyzer.get_all_exports();
+            let mut all_exports = Vec::new();
+            for (_pkg, names) in exports {
+                all_exports.extend(names);
+            }
+
+            let report = tsrs::DeadCodeReport::new(
+                "root".to_string(),
+                reachable_count + dead_code.len(),
+                dead_code.iter().map(|(_, name)| (name.clone(), "Unreachable from entry points".to_string())).collect(),
+                analyzer.compute_reachable().iter().map(|_| "live".to_string()).collect::<Vec<_>>()
+                    .into_iter()
+                    .zip(std::iter::repeat(""))
+                    .map(|(s, _)| s)
+                    .collect::<Vec<_>>(),
+                analyzer.get_entry_points().iter().map(|_| "entry".to_string()).collect::<Vec<_>>()
+                    .into_iter()
+                    .zip(std::iter::repeat(""))
+                    .map(|(s, _)| s)
+                    .collect::<Vec<_>>(),
+                all_exports,
+            );
+
+            // Write JSON report
+            let json_path = report_dir.join("dead_code.json");
+            fs::write(&json_path, report.to_json())?;
+
+            // Write HTML report
+            let html_path = report_dir.join("dead_code.html");
+            fs::write(&html_path, report.to_html())?;
+
+            if !quiet {
+                println!("  ✓ JSON report: {}", json_path.display());
+                println!("  ✓ HTML report: {}", html_path.display());
+            }
+        }
+
+        if print_report {
+            let report = tsrs::DeadCodeReport::new(
+                "root".to_string(),
+                reachable_count + dead_code.len(),
+                dead_code.iter().map(|(_, name)| (name.clone(), "Unreachable from entry points".to_string())).collect(),
+                vec![],
+                vec![],
+                vec![],
+            );
+
+            println!("\n{}", report.to_json());
+        }
+    }
+
+    if !quiet {
+        println!("\n✅ Optimization complete!");
+        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        println!("📊 Summary:");
+        println!("   Dead functions: {}", dead_code.len());
+        println!("   Reachable functions: {}", reachable_count);
+        println!("   Output directory: {}", output_dir.display());
+    }
 
     Ok(())
 }

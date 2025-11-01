@@ -801,6 +801,32 @@ impl CallGraphAnalyzer {
             })
             .collect()
     }
+
+    /// Get public exports (functions declared in `__all__`) for a package
+    #[must_use]
+    pub fn get_public_exports(&self, package: &str) -> Vec<String> {
+        self.public_exports
+            .get(package)
+            .map(|exports| {
+                let mut names: Vec<_> = exports.iter().cloned().collect();
+                names.sort();
+                names
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get all packages with their exports
+    #[must_use]
+    pub fn get_all_exports(&self) -> HashMap<String, Vec<String>> {
+        self.public_exports
+            .iter()
+            .map(|(package, exports)| {
+                let mut names: Vec<_> = exports.iter().cloned().collect();
+                names.sort();
+                (package.clone(), names)
+            })
+            .collect()
+    }
 }
 
 impl Default for CallGraphAnalyzer {
