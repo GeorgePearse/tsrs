@@ -960,7 +960,7 @@ impl CallGraphAnalyzer {
         for ((package, local_name), (source_pkg, source_func)) in &self.imports {
             result
                 .entry(package.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push((local_name.clone(), source_pkg.clone(), source_func.clone()));
         }
 

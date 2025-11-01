@@ -543,10 +543,8 @@ impl NameVisitor {
                 for value in &dict.values {
                     self.visit_expr(value);
                 }
-                for key in &dict.keys {
-                    if let Some(k) = key {
-                        self.visit_expr(k);
-                    }
+                for key in dict.keys.iter().flatten() {
+                    self.visit_expr(key);
                 }
             }
             ast::Expr::Set(set_expr) => {
@@ -660,7 +658,7 @@ impl NameVisitor {
         let line_num = lineno.map_or(0, ast::Int::to_usize);
         self.names
             .entry(name.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(line_num);
     }
 }

@@ -1362,10 +1362,8 @@ impl<'a> FunctionRewriter<'a> {
         if let Some(plan) = self.plans.get(&qualified_name) {
             if plan.has_match_statement {
                 self.abort = true;
-            } else {
-                if !plan.has_comprehension {
-                    self.rewrite_with_plan(plan, args, returns, body);
-                }
+            } else if !plan.has_comprehension {
+                self.rewrite_with_plan(plan, args, returns, body);
             }
         }
 

@@ -1,6 +1,5 @@
 /// Integration tests for cross-package analysis functionality
 /// Tests real Python package scenarios to validate Phase 1 & 2 implementation
-
 use tsrs::CallGraphAnalyzer;
 
 #[test]

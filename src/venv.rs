@@ -177,17 +177,12 @@ fn directory_contains_python(path: &Path) -> Result<bool> {
     for entry in std::fs::read_dir(path)? {
         let entry = entry?;
         let child_path = entry.path();
-        if child_path.is_file() {
-            if child_path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("py"))
-            {
-                return Ok(true);
-            }
-        } else if child_path.is_dir() {
-            if directory_contains_python(&child_path)? {
-                return Ok(true);
-            }
+        if (child_path.is_file() && child_path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("py")))
+            || (child_path.is_dir() && directory_contains_python(&child_path)?)
+        {
+            return Ok(true);
         }
     }
     Ok(false)
