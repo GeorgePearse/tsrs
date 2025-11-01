@@ -225,15 +225,6 @@ impl CallGraphAnalyzer {
         id
     }
 
-    /// Add a call edge from caller to callee
-    fn add_call_edge(&mut self, caller: FunctionId, callee: FunctionId, location: SourceLocation) {
-        self.edges.push(CallEdge {
-            caller,
-            callee,
-            location,
-        });
-    }
-
     /// Analyze a Python file and build call graph
     ///
     /// # Errors
