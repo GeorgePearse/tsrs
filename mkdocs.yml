@@ -16,6 +16,9 @@ theme:
     - toc.integrate
     - content.code.copy
 
+extra_css:
+  - assets/custom.css
+
 plugins:
   - search
 
