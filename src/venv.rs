@@ -127,6 +127,16 @@ impl VenvAnalyzer {
                     });
                     seen.insert(name);
                 }
+            } else if path.is_file() && path.extension().is_some_and(|ext| ext == "py") {
+                if seen.contains(&name) {
+                    continue;
+                }
+                packages.push(PackageInfo {
+                    name: name.clone(),
+                    version: None,
+                    path: path.clone(),
+                });
+                seen.insert(name);
             }
         }
 

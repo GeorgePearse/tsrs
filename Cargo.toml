@@ -1,6 +1,6 @@
 [package]
 name = "tsrs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Tree-shaking in Rust for Python"
 authors = ["George Pearse"]
@@ -13,6 +13,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 thiserror = "1"
+dunce = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
@@ -22,6 +23,7 @@ rayon = "1"
 num_cpus = "1"
 encoding_rs = "0.8"
 similar = "2"
+ignore = "0.4"
 
 [lib]
 name = "tsrs"
@@ -36,4 +38,6 @@ default = []
 python-extension = ["pyo3", "pyo3?/extension-module"]
 
 [dev-dependencies]
+assert_cmd = "2"
 tempfile = "3"
+serde_json = "1"

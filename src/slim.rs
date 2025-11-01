@@ -179,14 +179,34 @@ impl VenvSlimmer {
 
         // Copy each used package
         for package in &venv_info.packages {
-            let package_name = package.name.split('-').next().unwrap_or(&package.name);
+            let mut package_name = package
+                .name
+                .split('-')
+                .next()
+                .unwrap_or(&package.name)
+                .to_string();
+            if package_name.ends_with(".py") {
+                package_name = package_name.trim_end_matches(".py").to_string();
+            }
 
-            if used_imports.imports.contains(package_name) {
+            if used_imports.imports.contains(&package_name) {
                 let src = &package.path;
-                let dst = dst_site_packages.join(&package.name);
+                let dst = if src.is_dir() {
+                    dst_site_packages.join(&package.name)
+                } else {
+                    let filename = src
+                        .file_name()
+                        .map(|os| os.to_string_lossy().to_string())
+                        .unwrap_or_else(|| package.name.clone());
+                    dst_site_packages.join(filename)
+                };
 
                 tracing::debug!("Copying package: {}", package.name);
-                self.copy_dir_recursive(src, &dst)?;
+                if src.is_dir() {
+                    self.copy_dir_recursive(src, &dst)?;
+                } else {
+                    fs::copy(src, &dst)?;
+                }
             }
         }
 
