@@ -28,6 +28,10 @@ nav:
     - API Reference: API.md
     - Minification Design: MINIFY_DESIGN.md
     - Test Repositories: TEST_REPOS_SUMMARY.md
+  - Development:
+    - Architecture Guide: AGENTS.md
+  - Release Notes:
+    - Changelog: CHANGELOG.md
 
 markdown_extensions:
   - pymdownx.highlight:
