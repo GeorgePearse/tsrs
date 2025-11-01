@@ -461,56 +461,208 @@ impl CallGraphAnalyzer {
         Ok(())
     }
 
-    /// Extract function calls from all statements in a suite
+    /// Extract function calls from all statements in a suite (module level)
     fn extract_calls_suite(&mut self, package: &str, suite: &[ast::Stmt]) -> Result<()> {
         for stmt in suite {
-            self.extract_calls_from_stmt(package, stmt)?;
+            self.extract_calls_from_stmt(package, stmt, None)?;
         }
         Ok(())
     }
 
-    /// Recursive helper to extract calls from statements
-    fn extract_calls_from_stmt(&mut self, package: &str, stmt: &ast::Stmt) -> Result<()> {
+    /// Recursive helper to extract calls from statements with function context
+    fn extract_calls_from_stmt(
+        &mut self,
+        package: &str,
+        stmt: &ast::Stmt,
+        current_func: Option<FunctionId>,
+    ) -> Result<()> {
         match stmt {
             ast::Stmt::FunctionDef(func_def) => {
-                self.extract_calls_suite(package, &func_def.body)?;
+                let func_name = func_def.name.as_str();
+                // Look up this function in the index
+                let func_id = self
+                    .function_index
+                    .get(&(package.to_string(), func_name.to_string()))
+                    .copied();
+
+                if let Some(func_id) = func_id {
+                    // Walk the function body with this function as context
+                    for body_stmt in &func_def.body {
+                        self.extract_calls_from_stmt(package, body_stmt, Some(func_id))?;
+                    }
+                }
             }
             ast::Stmt::AsyncFunctionDef(func_def) => {
-                self.extract_calls_suite(package, &func_def.body)?;
+                let func_name = func_def.name.as_str();
+                let func_id = self
+                    .function_index
+                    .get(&(package.to_string(), func_name.to_string()))
+                    .copied();
+
+                if let Some(func_id) = func_id {
+                    for body_stmt in &func_def.body {
+                        self.extract_calls_from_stmt(package, body_stmt, Some(func_id))?;
+                    }
+                }
             }
             ast::Stmt::ClassDef(class_def) => {
-                self.extract_calls_suite(package, &class_def.body)?;
+                // Walk class methods
+                for body_stmt in &class_def.body {
+                    self.extract_calls_from_stmt(package, body_stmt, current_func)?;
+                }
             }
             ast::Stmt::If(if_stmt) => {
-                self.extract_calls_suite(package, &if_stmt.body)?;
-                self.extract_calls_suite(package, &if_stmt.orelse)?;
+                for body_stmt in &if_stmt.body {
+                    self.extract_calls_from_stmt(package, body_stmt, current_func)?;
+                }
+                for else_stmt in &if_stmt.orelse {
+                    self.extract_calls_from_stmt(package, else_stmt, current_func)?;
+                }
             }
             ast::Stmt::For(for_stmt) => {
-                self.extract_calls_suite(package, &for_stmt.body)?;
-                self.extract_calls_suite(package, &for_stmt.orelse)?;
+                for body_stmt in &for_stmt.body {
+                    self.extract_calls_from_stmt(package, body_stmt, current_func)?;
+                }
+                for else_stmt in &for_stmt.orelse {
+                    self.extract_calls_from_stmt(package, else_stmt, current_func)?;
+                }
             }
             ast::Stmt::AsyncFor(for_stmt) => {
-                self.extract_calls_suite(package, &for_stmt.body)?;
-                self.extract_calls_suite(package, &for_stmt.orelse)?;
+                for body_stmt in &for_stmt.body {
+                    self.extract_calls_from_stmt(package, body_stmt, current_func)?;
+                }
+                for else_stmt in &for_stmt.orelse {
+                    self.extract_calls_from_stmt(package, else_stmt, current_func)?;
+                }
             }
             ast::Stmt::While(while_stmt) => {
-                self.extract_calls_suite(package, &while_stmt.body)?;
-                self.extract_calls_suite(package, &while_stmt.orelse)?;
+                for body_stmt in &while_stmt.body {
+                    self.extract_calls_from_stmt(package, body_stmt, current_func)?;
+                }
+                for else_stmt in &while_stmt.orelse {
+                    self.extract_calls_from_stmt(package, else_stmt, current_func)?;
+                }
             }
             ast::Stmt::With(with_stmt) => {
-                self.extract_calls_suite(package, &with_stmt.body)?;
+                for body_stmt in &with_stmt.body {
+                    self.extract_calls_from_stmt(package, body_stmt, current_func)?;
+                }
             }
             ast::Stmt::AsyncWith(with_stmt) => {
-                self.extract_calls_suite(package, &with_stmt.body)?;
+                for body_stmt in &with_stmt.body {
+                    self.extract_calls_from_stmt(package, body_stmt, current_func)?;
+                }
             }
             ast::Stmt::Try(try_stmt) => {
-                self.extract_calls_suite(package, &try_stmt.body)?;
+                for body_stmt in &try_stmt.body {
+                    self.extract_calls_from_stmt(package, body_stmt, current_func)?;
+                }
                 for handler in &try_stmt.handlers {
                     let ast::ExceptHandler::ExceptHandler(h) = handler;
-                    self.extract_calls_suite(package, &h.body)?;
+                    for handler_stmt in &h.body {
+                        self.extract_calls_from_stmt(package, handler_stmt, current_func)?;
+                    }
                 }
-                self.extract_calls_suite(package, &try_stmt.orelse)?;
-                self.extract_calls_suite(package, &try_stmt.finalbody)?;
+                for else_stmt in &try_stmt.orelse {
+                    self.extract_calls_from_stmt(package, else_stmt, current_func)?;
+                }
+                for final_stmt in &try_stmt.finalbody {
+                    self.extract_calls_from_stmt(package, final_stmt, current_func)?;
+                }
+            }
+            ast::Stmt::Expr(expr_stmt) => {
+                // Extract calls from expressions in this statement
+                self.extract_calls_from_expr(package, &expr_stmt.value, current_func)?;
+            }
+            ast::Stmt::Assign(assign_stmt) => {
+                // Extract calls from the RHS of assignment
+                self.extract_calls_from_expr(package, &assign_stmt.value, current_func)?;
+            }
+            ast::Stmt::Return(ret_stmt) => {
+                if let Some(value) = &ret_stmt.value {
+                    self.extract_calls_from_expr(package, value, current_func)?;
+                }
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    /// Extract calls from an expression tree
+    fn extract_calls_from_expr(
+        &mut self,
+        package: &str,
+        expr: &ast::Expr,
+        current_func: Option<FunctionId>,
+    ) -> Result<()> {
+        match expr {
+            // Direct function call: func_name()
+            ast::Expr::Call(call) => {
+                if let ast::Expr::Name(name_expr) = call.func.as_ref() {
+                    let func_name = name_expr.id.as_str();
+                    // Look up the callee in this package
+                    if let Some(callee_id) = self
+                        .function_index
+                        .get(&(package.to_string(), func_name.to_string()))
+                        .copied()
+                    {
+                        if let Some(caller_id) = current_func {
+                            let location = SourceLocation { line: 0, col: 0 };
+                            self.edges.push(CallEdge {
+                                caller: caller_id,
+                                callee: callee_id,
+                                location,
+                            });
+                        }
+                    }
+                }
+                // Recursively process arguments
+                for arg in &call.args {
+                    self.extract_calls_from_expr(package, arg, current_func)?;
+                }
+                for keyword in &call.keywords {
+                    self.extract_calls_from_expr(package, &keyword.value, current_func)?;
+                }
+            }
+            // Recursively process compound expressions
+            ast::Expr::List(list) => {
+                for elt in &list.elts {
+                    self.extract_calls_from_expr(package, elt, current_func)?;
+                }
+            }
+            ast::Expr::Tuple(tuple) => {
+                for elt in &tuple.elts {
+                    self.extract_calls_from_expr(package, elt, current_func)?;
+                }
+            }
+            ast::Expr::Set(set) => {
+                for elt in &set.elts {
+                    self.extract_calls_from_expr(package, elt, current_func)?;
+                }
+            }
+            ast::Expr::BoolOp(bool_op) => {
+                for value in &bool_op.values {
+                    self.extract_calls_from_expr(package, value, current_func)?;
+                }
+            }
+            ast::Expr::UnaryOp(unary) => {
+                self.extract_calls_from_expr(package, &unary.operand, current_func)?;
+            }
+            ast::Expr::BinOp(bin_op) => {
+                self.extract_calls_from_expr(package, &bin_op.left, current_func)?;
+                self.extract_calls_from_expr(package, &bin_op.right, current_func)?;
+            }
+            ast::Expr::Compare(cmp) => {
+                self.extract_calls_from_expr(package, &cmp.left, current_func)?;
+                for comparator in &cmp.comparators {
+                    self.extract_calls_from_expr(package, comparator, current_func)?;
+                }
+            }
+            ast::Expr::IfExp(if_exp) => {
+                self.extract_calls_from_expr(package, &if_exp.body, current_func)?;
+                self.extract_calls_from_expr(package, &if_exp.test, current_func)?;
+                self.extract_calls_from_expr(package, &if_exp.orelse, current_func)?;
             }
             _ => {}
         }
