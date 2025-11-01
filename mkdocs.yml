@@ -28,8 +28,9 @@ nav:
     - API Reference: API.md
     - Minification Design: MINIFY_DESIGN.md
     - Test Repositories: TEST_REPOS_SUMMARY.md
-  - Development:
+  - Architecture & Design:
     - Architecture Guide: AGENTS.md
+    - Alternative Approaches: ALTERNATIVE_APPROACHES.md
   - Release Notes:
     - Changelog: CHANGELOG.md
 
