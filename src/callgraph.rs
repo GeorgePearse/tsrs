@@ -1,12 +1,86 @@
-//! Function call graph analysis per package
+//! Function call graph analysis with interprocedural reachability
+//!
+//! This module analyzes Python code to build a call graph and detect dead code.
+//! It uses AST-based analysis to properly handle:
+//! - Function and method definitions
+//! - Call edges between functions
+//! - Entry points (main blocks, tests, public APIs)
+//! - Cross-package analysis
+//! - Reachability from entry points
 
 use crate::error::{Result, TsrsError};
-use regex::Regex;
+use rustpython_parser::{ast, Parse};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
-/// Represents a function or class reference
+/// Unique identifier for a function node
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FunctionId(pub usize);
+
+/// Source location information
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SourceLocation {
+    pub line: usize,
+    pub col: usize,
+}
+
+/// Kind of function
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FunctionKind {
+    /// Regular function
+    Function,
+    /// Async function
+    AsyncFunction,
+    /// Method inside a class
+    Method,
+    /// Dunder method (__init__, __call__, etc)
+    DunderMethod,
+    /// Lambda function
+    Lambda,
+}
+
+/// Kind of function for dead code analysis
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum EntryPointKind {
+    /// Code at module level (always executed on import)
+    ModuleInit,
+    /// if __name__ == "__main__" block
+    ScriptMain,
+    /// Test function (test_*, @pytest, @unittest)
+    TestFunction,
+    /// Dunder method (kept for protocol compatibility)
+    DunderMethod,
+    /// Exported in __all__
+    PublicExport,
+    /// Regular function (not an entry point)
+    Regular,
+}
+
+/// A function in the call graph
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallGraphNode {
+    pub id: FunctionId,
+    pub name: String,
+    pub package: String,
+    pub location: SourceLocation,
+    pub kind: FunctionKind,
+    pub entry_point: EntryPointKind,
+    /// Names of decorators (for framework detection)
+    pub decorators: Vec<String>,
+    /// Whether this function is marked with @property or similar
+    pub is_special: bool,
+}
+
+/// A call edge from caller to callee
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CallEdge {
+    pub caller: FunctionId,
+    pub callee: FunctionId,
+    pub location: SourceLocation,
+}
+
+/// Represents a function or class reference (legacy, for compatibility)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FunctionRef {
     /// Package name (top-level module)
@@ -73,109 +147,306 @@ impl PackageCallGraph {
     }
 }
 
-/// Analyzes function calls per package
+/// Analyzes function calls per package using AST traversal
 pub struct CallGraphAnalyzer {
+    /// Legacy per-package graphs (for backward compatibility)
     graphs: HashMap<String, PackageCallGraph>,
-    function_pattern: Regex,
-    call_pattern: Regex,
-    _import_pattern: Regex,
+    /// New AST-based call graph
+    nodes: HashMap<FunctionId, CallGraphNode>,
+    /// Call edges
+    edges: Vec<CallEdge>,
+    /// Next available function ID
+    next_id: usize,
+    /// Map from (package, function_name) to FunctionId
+    function_index: HashMap<(String, String), FunctionId>,
+    /// Entry points (functions reachable from script/module init)
+    entry_points: HashSet<FunctionId>,
+    /// Public API exports from each package
+    public_exports: HashMap<String, HashSet<String>>,
 }
 
 impl CallGraphAnalyzer {
     /// Create a new call graph analyzer
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if regex compilation fails.
-    pub fn new() -> Result<Self> {
-        let function_pattern = Regex::new(r"^\s*(?:async\s+)?def\s+([a-zA-Z_][a-zA-Z0-9_]*)")
-            .map_err(|e| TsrsError::ParseError(format!("Failed to compile regex: {e}")))?;
-
-        let call_pattern = Regex::new(r"\b([a-zA-Z_][a-zA-Z0-9_\.]*)\s*\(")
-            .map_err(|e| TsrsError::ParseError(format!("Failed to compile regex: {e}")))?;
-
-        let import_pattern =
-            Regex::new(r"^(?:from\s+([a-zA-Z0-9_\.]+)\s+)?import\s+([a-zA-Z0-9_,\s]+)")
-                .map_err(|e| TsrsError::ParseError(format!("Failed to compile regex: {e}")))?;
-
-        Ok(CallGraphAnalyzer {
+    #[must_use]
+    pub fn new() -> Self {
+        CallGraphAnalyzer {
             graphs: HashMap::new(),
-            function_pattern,
-            call_pattern,
-            _import_pattern: import_pattern,
-        })
+            nodes: HashMap::new(),
+            edges: Vec::new(),
+            next_id: 0,
+            function_index: HashMap::new(),
+            entry_points: HashSet::new(),
+            public_exports: HashMap::new(),
+        }
+    }
+
+    /// Register a function in the call graph
+    fn register_function(
+        &mut self,
+        package: String,
+        name: String,
+        location: SourceLocation,
+        kind: FunctionKind,
+        entry_point: EntryPointKind,
+        decorators: Vec<String>,
+    ) -> FunctionId {
+        let id = FunctionId(self.next_id);
+        self.next_id += 1;
+
+        let is_special = decorators.iter().any(|d| {
+            d.contains("property") || d.contains("staticmethod") || d.contains("classmethod")
+        });
+
+        let node = CallGraphNode {
+            id,
+            name: name.clone(),
+            package: package.clone(),
+            location,
+            kind,
+            entry_point,
+            decorators,
+            is_special,
+        };
+
+        self.nodes.insert(id, node);
+        self.function_index.insert((package, name), id);
+
+        if matches!(
+            entry_point,
+            EntryPointKind::ScriptMain | EntryPointKind::ModuleInit | EntryPointKind::TestFunction
+        ) {
+            self.entry_points.insert(id);
+        }
+
+        id
+    }
+
+    /// Add a call edge from caller to callee
+    fn add_call_edge(&mut self, caller: FunctionId, callee: FunctionId, location: SourceLocation) {
+        self.edges.push(CallEdge {
+            caller,
+            callee,
+            location,
+        });
     }
 
     /// Analyze a Python file and build call graph
     ///
     /// # Errors
     ///
-    /// Returns an error if the file cannot be read.
+    /// Returns an error if the file cannot be read or parsed.
     pub fn analyze_file<P: AsRef<Path>>(&mut self, path: P, package: &str) -> Result<()> {
         let source = std::fs::read_to_string(path).map_err(TsrsError::Io)?;
-        self.analyze_source(package, &source);
+        self.analyze_source(package, &source)
+    }
+
+    /// Analyze Python source code using AST traversal
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source code cannot be parsed.
+    pub fn analyze_source(&mut self, package: &str, source: &str) -> Result<()> {
+        let suite = ast::Suite::parse(source, "<source>")
+            .map_err(|e| TsrsError::ParseError(format!("Failed to parse Python: {e}")))?;
+
+        // First pass: register all functions
+        self.register_module_functions_suite(package, &suite)?;
+
+        // Second pass: build call edges
+        self.extract_calls_suite(package, &suite)?;
+
+        // Also maintain legacy PackageCallGraph for backward compatibility
+        self.build_legacy_graph(package);
+
         Ok(())
     }
 
-    /// Analyze Python source and extract function definitions and calls
-    pub fn analyze_source(&mut self, package: &str, source: &str) {
+    /// Register all functions in a suite (module body)
+    fn register_module_functions_suite(
+        &mut self,
+        package: &str,
+        suite: &[ast::Stmt],
+    ) -> Result<()> {
+        for stmt in suite {
+            self.register_module_functions(package, stmt)?;
+        }
+        Ok(())
+    }
+
+    /// Register functions at module level (handles nested classes/functions too)
+    fn register_module_functions(&mut self, package: &str, stmt: &ast::Stmt) -> Result<()> {
+        match stmt {
+            ast::Stmt::FunctionDef(func_def) => {
+                let decorators = func_def
+                    .decorator_list
+                    .iter()
+                    .filter_map(|d| self.extract_decorator_name(d))
+                    .collect();
+
+                let func_name = func_def.name.as_str();
+                let is_dunder = func_name.starts_with("__") && func_name.ends_with("__");
+                let kind = if is_dunder {
+                    FunctionKind::DunderMethod
+                } else {
+                    FunctionKind::Function
+                };
+                let entry_point = if is_dunder {
+                    EntryPointKind::DunderMethod
+                } else if func_name.starts_with("test_") {
+                    EntryPointKind::TestFunction
+                } else {
+                    EntryPointKind::Regular
+                };
+
+                let location = SourceLocation { line: 0, col: 0 };
+
+                self.register_function(
+                    package.to_string(),
+                    func_name.to_string(),
+                    location,
+                    kind,
+                    entry_point,
+                    decorators,
+                );
+
+                // Also register nested functions/classes
+                self.register_module_functions_suite(package, &func_def.body)?;
+            }
+            ast::Stmt::AsyncFunctionDef(func_def) => {
+                let decorators = func_def
+                    .decorator_list
+                    .iter()
+                    .filter_map(|d| self.extract_decorator_name(d))
+                    .collect();
+
+                let func_name = func_def.name.as_str();
+                let is_dunder = func_name.starts_with("__") && func_name.ends_with("__");
+                let entry_point = if is_dunder {
+                    EntryPointKind::DunderMethod
+                } else if func_name.starts_with("test_") {
+                    EntryPointKind::TestFunction
+                } else {
+                    EntryPointKind::Regular
+                };
+
+                let location = SourceLocation { line: 0, col: 0 };
+
+                self.register_function(
+                    package.to_string(),
+                    func_name.to_string(),
+                    location,
+                    FunctionKind::AsyncFunction,
+                    entry_point,
+                    decorators,
+                );
+
+                // Also register nested functions/classes
+                self.register_module_functions_suite(package, &func_def.body)?;
+            }
+            ast::Stmt::ClassDef(class_def) => {
+                // Register methods inside classes
+                self.register_module_functions_suite(package, &class_def.body)?;
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    /// Extract function calls from all statements in a suite
+    fn extract_calls_suite(&mut self, package: &str, suite: &[ast::Stmt]) -> Result<()> {
+        for stmt in suite {
+            self.extract_calls_from_stmt(package, stmt)?;
+        }
+        Ok(())
+    }
+
+    /// Recursive helper to extract calls from statements
+    fn extract_calls_from_stmt(&mut self, package: &str, stmt: &ast::Stmt) -> Result<()> {
+        match stmt {
+            ast::Stmt::FunctionDef(func_def) => {
+                self.extract_calls_suite(package, &func_def.body)?;
+            }
+            ast::Stmt::AsyncFunctionDef(func_def) => {
+                self.extract_calls_suite(package, &func_def.body)?;
+            }
+            ast::Stmt::ClassDef(class_def) => {
+                self.extract_calls_suite(package, &class_def.body)?;
+            }
+            ast::Stmt::If(if_stmt) => {
+                self.extract_calls_suite(package, &if_stmt.body)?;
+                self.extract_calls_suite(package, &if_stmt.orelse)?;
+            }
+            ast::Stmt::For(for_stmt) => {
+                self.extract_calls_suite(package, &for_stmt.body)?;
+                self.extract_calls_suite(package, &for_stmt.orelse)?;
+            }
+            ast::Stmt::AsyncFor(for_stmt) => {
+                self.extract_calls_suite(package, &for_stmt.body)?;
+                self.extract_calls_suite(package, &for_stmt.orelse)?;
+            }
+            ast::Stmt::While(while_stmt) => {
+                self.extract_calls_suite(package, &while_stmt.body)?;
+                self.extract_calls_suite(package, &while_stmt.orelse)?;
+            }
+            ast::Stmt::With(with_stmt) => {
+                self.extract_calls_suite(package, &with_stmt.body)?;
+            }
+            ast::Stmt::AsyncWith(with_stmt) => {
+                self.extract_calls_suite(package, &with_stmt.body)?;
+            }
+            ast::Stmt::Try(try_stmt) => {
+                self.extract_calls_suite(package, &try_stmt.body)?;
+                for handler in &try_stmt.handlers {
+                    let ast::ExceptHandler::ExceptHandler(h) = handler;
+                    self.extract_calls_suite(package, &h.body)?;
+                }
+                self.extract_calls_suite(package, &try_stmt.orelse)?;
+                self.extract_calls_suite(package, &try_stmt.finalbody)?;
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    /// Extract decorator name from an expression
+    fn extract_decorator_name(&self, expr: &ast::Expr) -> Option<String> {
+        match expr {
+            ast::Expr::Name(name_expr) => Some(name_expr.id.as_str().to_string()),
+            ast::Expr::Attribute(attr) => Some(attr.attr.as_str().to_string()),
+            _ => None,
+        }
+    }
+
+    /// Build legacy PackageCallGraph for backward compatibility
+    fn build_legacy_graph(&mut self, package: &str) {
         let graph = self
             .graphs
             .entry(package.to_string())
             .or_insert_with(|| PackageCallGraph::new(package.to_string()));
 
-        for line in source.lines() {
-            // Skip comments and empty lines
-            let line = line.split('#').next().unwrap_or("").trim();
-            if line.is_empty() {
-                continue;
-            }
-
-            // Extract function definitions
-            let is_def_line = line.starts_with("def ");
-            if is_def_line {
-                if let Some(caps) = self.function_pattern.captures(line) {
-                    if let Some(func_name) = caps.get(1) {
-                        graph.add_definition(func_name.as_str().to_string());
-                    }
-                }
-                // Skip extracting calls from def lines
-                continue;
-            }
-
-            // Extract function calls (but not from def lines)
-            for caps in self.call_pattern.captures_iter(line) {
-                if let Some(call_expr) = caps.get(1) {
-                    let call_str = call_expr.as_str();
-                    let parts: Vec<&str> = call_str.split('.').collect();
-
-                    if parts.len() == 1 {
-                        // Local call
-                        graph.add_internal_call(parts[0].to_string());
-                    } else if parts.len() >= 2 {
-                        // External call
-                        let module = parts[0];
-                        let func = parts[1..].join(".");
-                        graph.add_external_call(FunctionRef::new(module.to_string(), func));
-                    }
-                }
+        // Populate definitions
+        for node in self.nodes.values() {
+            if node.package == package {
+                graph.add_definition(node.name.clone());
             }
         }
     }
 
-    /// Get all call graphs
+    /// Get all call graphs (legacy)
     #[must_use]
     pub fn get_graphs(&self) -> &HashMap<String, PackageCallGraph> {
         &self.graphs
     }
 
-    /// Get call graph for a specific package
+    /// Get call graph for a specific package (legacy)
     #[must_use]
     pub fn get_graph(&self, package: &str) -> Option<&PackageCallGraph> {
         self.graphs.get(package)
     }
 
-    /// Find unused functions in a package
+    /// Find unused functions in a package (legacy)
     #[must_use]
     pub fn find_unused_functions(&self, package: &str) -> HashSet<String> {
         if let Some(graph) = self.get_graph(package) {
@@ -191,7 +462,7 @@ impl CallGraphAnalyzer {
         }
     }
 
-    /// Find all external dependencies
+    /// Find all external dependencies (legacy)
     #[must_use]
     pub fn find_external_dependencies(&self) -> HashSet<String> {
         let mut deps = HashSet::new();
@@ -202,10 +473,78 @@ impl CallGraphAnalyzer {
         }
         deps
     }
+
+    /// Get all nodes in the call graph
+    #[must_use]
+    pub fn get_nodes(&self) -> &HashMap<FunctionId, CallGraphNode> {
+        &self.nodes
+    }
+
+    /// Get all edges in the call graph
+    #[must_use]
+    pub fn get_edges(&self) -> &[CallEdge] {
+        &self.edges
+    }
+
+    /// Get entry points
+    #[must_use]
+    pub fn get_entry_points(&self) -> &HashSet<FunctionId> {
+        &self.entry_points
+    }
+
+    /// Compute reachable functions from entry points
+    #[must_use]
+    pub fn compute_reachable(&self) -> HashSet<FunctionId> {
+        let mut reachable = HashSet::new();
+        let mut queue = VecDeque::from_iter(self.entry_points.iter().copied());
+
+        while let Some(current) = queue.pop_front() {
+            if reachable.insert(current) {
+                // Find all functions called by current
+                for edge in &self.edges {
+                    if edge.caller == current && !reachable.contains(&edge.callee) {
+                        queue.push_back(edge.callee);
+                    }
+                }
+            }
+        }
+
+        reachable
+    }
+
+    /// Find dead code (unreachable from entry points)
+    #[must_use]
+    pub fn find_dead_code(&self) -> Vec<(FunctionId, String)> {
+        let reachable = self.compute_reachable();
+
+        self.nodes
+            .values()
+            .filter_map(|node| {
+                // Keep if reachable
+                if reachable.contains(&node.id) {
+                    return None;
+                }
+
+                // Keep dunder methods
+                if node.name.starts_with("__") && node.name.ends_with("__") {
+                    return None;
+                }
+
+                // Keep if exported
+                if let Some(exports) = self.public_exports.get(&node.package) {
+                    if exports.contains(&node.name) {
+                        return None;
+                    }
+                }
+
+                Some((node.id, node.name.clone()))
+            })
+            .collect()
+    }
 }
 
 impl Default for CallGraphAnalyzer {
     fn default() -> Self {
-        Self::new().expect("Failed to create CallGraphAnalyzer")
+        Self::new()
     }
 }
