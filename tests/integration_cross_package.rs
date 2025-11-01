@@ -757,3 +757,351 @@ def test_pipeline():
     assert!(!dead_names.contains(&"preprocess".to_string()), "preprocess should be live");
     assert!(!dead_names.contains(&"render".to_string()), "render should be live");
 }
+
+#[test]
+fn test_numpy_like_package_structure() {
+    // Scenario: NumPy-like package with core, linalg, and polynomial modules
+    // Simulates realistic scientific computing library structure
+
+    let mut analyzer = CallGraphAnalyzer::new();
+
+    // Core array operations
+    let core_code = r#"
+def create_array(shape):
+    """Create array"""
+    return {"shape": shape, "data": []}
+
+def reshape_array(arr, shape):
+    """Reshape array"""
+    return {"shape": shape, "data": arr["data"]}
+
+def sum_array(arr):
+    """Sum array elements"""
+    return 0
+
+def unused_core_helper():
+    """Never used"""
+    return "dead"
+
+def test_core():
+    """Test entry point"""
+    arr = create_array((2, 3))
+    return reshape_array(arr, (3, 2))
+"#;
+
+    // Linear algebra module
+    let linalg_code = r#"
+from core import create_array, reshape_array
+
+def dot_product(a, b):
+    """Compute dot product"""
+    arr1 = create_array((3,))
+    arr2 = create_array((3,))
+    return 0
+
+def matrix_inverse(m):
+    """Compute matrix inverse"""
+    reshape_array(m, (3, 3))
+    return m
+
+def unused_linalg_fn():
+    """Dead code"""
+    return "dead"
+
+def test_linalg():
+    """Test entry point"""
+    return dot_product(None, None)
+"#;
+
+    // Polynomial module
+    let poly_code = r#"
+from core import create_array
+
+def polynomial_fit(x, y, degree):
+    """Fit polynomial"""
+    create_array((degree + 1,))
+    return []
+
+def polynomial_eval(p, x):
+    """Evaluate polynomial"""
+    return 0
+
+def unused_poly_fn():
+    """Dead code"""
+    return "dead"
+
+def test_poly():
+    """Test entry point"""
+    return polynomial_fit([1, 2, 3], [1, 4, 9], 2)
+"#;
+
+    analyzer.analyze_source("core", core_code).expect("Failed to analyze core");
+    analyzer.analyze_source("linalg", linalg_code).expect("Failed to analyze linalg");
+    analyzer.analyze_source("poly", poly_code).expect("Failed to analyze poly");
+
+    // Register imports
+    analyzer.add_import("linalg".to_string(), "create_array".to_string(),
+                       "core".to_string(), "create_array".to_string());
+    analyzer.add_import("linalg".to_string(), "reshape_array".to_string(),
+                       "core".to_string(), "reshape_array".to_string());
+    analyzer.add_import("poly".to_string(), "create_array".to_string(),
+                       "core".to_string(), "create_array".to_string());
+
+    let dead_code = analyzer.find_dead_code();
+    let dead_names: Vec<String> = dead_code.iter().map(|(_, name)| name.clone()).collect();
+
+    // Verify dead functions
+    assert!(dead_names.contains(&"unused_core_helper".to_string()), "unused_core_helper should be dead");
+    assert!(dead_names.contains(&"unused_linalg_fn".to_string()), "unused_linalg_fn should be dead");
+    assert!(dead_names.contains(&"unused_poly_fn".to_string()), "unused_poly_fn should be dead");
+    // sum_array is defined but never called
+    assert!(dead_names.contains(&"sum_array".to_string()), "sum_array should be dead (unused)");
+    assert!(dead_names.contains(&"matrix_inverse".to_string()), "matrix_inverse should be dead (unused)");
+    assert!(dead_names.contains(&"polynomial_eval".to_string()), "polynomial_eval should be dead (unused)");
+
+    // Verify live functions
+    assert!(!dead_names.contains(&"test_core".to_string()), "test_core should be live (entry point)");
+    assert!(!dead_names.contains(&"test_linalg".to_string()), "test_linalg should be live (entry point)");
+    assert!(!dead_names.contains(&"test_poly".to_string()), "test_poly should be live (entry point)");
+    assert!(!dead_names.contains(&"create_array".to_string()), "create_array should be live (called from linalg and poly)");
+    assert!(!dead_names.contains(&"reshape_array".to_string()), "reshape_array should be live (called from linalg)");
+    assert!(!dead_names.contains(&"dot_product".to_string()), "dot_product should be live (called from test_linalg)");
+    assert!(!dead_names.contains(&"polynomial_fit".to_string()), "polynomial_fit should be live (called from test_poly)");
+}
+
+#[test]
+fn test_requests_like_http_library() {
+    // Scenario: Requests-like library with models, adapters, and utilities
+    // Simulates realistic HTTP client library
+
+    let mut analyzer = CallGraphAnalyzer::new();
+
+    // Models for requests/responses
+    let models_code = r#"
+def prepare_request(method, url, headers):
+    """Prepare HTTP request"""
+    return {"method": method, "url": url, "headers": headers}
+
+def parse_response(status, body):
+    """Parse HTTP response"""
+    return {"status": status, "body": body}
+
+def validate_url(url):
+    """Validate URL format"""
+    return True
+
+def unused_model_fn():
+    """Never used"""
+    return "dead"
+
+def test_models():
+    """Test entry point"""
+    return prepare_request("GET", "http://example.com", {})
+"#;
+
+    // HTTP adapter
+    let adapters_code = r#"
+from models import prepare_request, parse_response, validate_url
+
+def send_http_request(req):
+    """Send HTTP request"""
+    validate_url(req["url"])
+    return parse_response(200, "")
+
+def retry_request(req, times):
+    """Retry failed request"""
+    for i in range(times):
+        send_http_request(req)
+    return None
+
+def unused_adapter_fn():
+    """Never used"""
+    return "dead"
+
+def test_adapters():
+    """Test entry point"""
+    req = prepare_request("GET", "http://example.com", {})
+    return send_http_request(req)
+"#;
+
+    // Main request function
+    let session_code = r#"
+from models import prepare_request
+from adapters import send_http_request, retry_request
+
+def get(url, headers=None):
+    """HTTP GET request"""
+    req = prepare_request("GET", url, headers or {})
+    return send_http_request(req)
+
+def post(url, data):
+    """HTTP POST request"""
+    req = prepare_request("POST", url, {})
+    return send_http_request(req)
+
+def unused_session_fn():
+    """Never used"""
+    return "dead"
+
+def test_session():
+    """Test entry point"""
+    return get("http://example.com", {"User-Agent": "test"})
+"#;
+
+    analyzer.analyze_source("models", models_code).expect("Failed to analyze models");
+    analyzer.analyze_source("adapters", adapters_code).expect("Failed to analyze adapters");
+    analyzer.analyze_source("session", session_code).expect("Failed to analyze session");
+
+    // Register imports
+    analyzer.add_import("adapters".to_string(), "prepare_request".to_string(),
+                       "models".to_string(), "prepare_request".to_string());
+    analyzer.add_import("adapters".to_string(), "parse_response".to_string(),
+                       "models".to_string(), "parse_response".to_string());
+    analyzer.add_import("adapters".to_string(), "validate_url".to_string(),
+                       "models".to_string(), "validate_url".to_string());
+    analyzer.add_import("session".to_string(), "prepare_request".to_string(),
+                       "models".to_string(), "prepare_request".to_string());
+    analyzer.add_import("session".to_string(), "send_http_request".to_string(),
+                       "adapters".to_string(), "send_http_request".to_string());
+    analyzer.add_import("session".to_string(), "retry_request".to_string(),
+                       "adapters".to_string(), "retry_request".to_string());
+
+    let dead_code = analyzer.find_dead_code();
+    let dead_names: Vec<String> = dead_code.iter().map(|(_, name)| name.clone()).collect();
+
+    // Verify dead functions
+    assert!(dead_names.contains(&"unused_model_fn".to_string()), "unused_model_fn should be dead");
+    assert!(dead_names.contains(&"unused_adapter_fn".to_string()), "unused_adapter_fn should be dead");
+    assert!(dead_names.contains(&"unused_session_fn".to_string()), "unused_session_fn should be dead");
+    assert!(dead_names.contains(&"post".to_string()), "post should be dead (not called from test)");
+
+    // Note: retry_request and parse_response are imported but may be marked as live due to conservative approach
+
+    // Verify live functions
+    assert!(!dead_names.contains(&"test_models".to_string()), "test_models should be live (entry point)");
+    assert!(!dead_names.contains(&"test_adapters".to_string()), "test_adapters should be live (entry point)");
+    assert!(!dead_names.contains(&"test_session".to_string()), "test_session should be live (entry point)");
+    assert!(!dead_names.contains(&"prepare_request".to_string()), "prepare_request should be live (used by all)");
+    assert!(!dead_names.contains(&"send_http_request".to_string()), "send_http_request should be live");
+    assert!(!dead_names.contains(&"get".to_string()), "get should be live (called from test_session)");
+}
+
+#[test]
+fn test_flask_like_web_framework() {
+    // Scenario: Flask-like web framework with app, routing, and middleware
+    // Simulates realistic web framework structure
+
+    let mut analyzer = CallGraphAnalyzer::new();
+
+    // Routing module
+    let routing_code = r#"
+def route(path, methods=None):
+    """Route decorator"""
+    return {}
+
+def url_for(endpoint, **kwargs):
+    """Generate URL"""
+    return f"/path/{endpoint}"
+
+def redirect(url):
+    """Redirect response"""
+    return {"redirect": url}
+
+def unused_routing_fn():
+    """Never used"""
+    return "dead"
+
+def test_routing():
+    """Test entry point"""
+    return route("/index", ["GET"])
+"#;
+
+    // Middleware module
+    let middleware_code = r#"
+def before_request():
+    """Before request hook"""
+    return {}
+
+def after_request(response):
+    """After request hook"""
+    return response
+
+def error_handler(error):
+    """Handle errors"""
+    return {"error": str(error)}
+
+def unused_middleware_fn():
+    """Never used"""
+    return "dead"
+
+def test_middleware():
+    """Test entry point"""
+    return before_request()
+"#;
+
+    // Application core
+    let app_code = r#"
+from routing import route, url_for
+from middleware import before_request, after_request
+
+def create_app():
+    """Create Flask app"""
+    app = {}
+    route("/", ["GET"])
+    return app
+
+def run_app(app, host="localhost"):
+    """Run Flask app"""
+    before_request()
+    return "Running"
+
+def register_blueprint(app, blueprint):
+    """Register blueprint"""
+    return app
+
+def unused_app_fn():
+    """Never used"""
+    return "dead"
+
+def test_app():
+    """Test entry point"""
+    app = create_app()
+    return run_app(app)
+"#;
+
+    analyzer.analyze_source("routing", routing_code).expect("Failed to analyze routing");
+    analyzer.analyze_source("middleware", middleware_code).expect("Failed to analyze middleware");
+    analyzer.analyze_source("app", app_code).expect("Failed to analyze app");
+
+    // Register imports
+    analyzer.add_import("app".to_string(), "route".to_string(),
+                       "routing".to_string(), "route".to_string());
+    analyzer.add_import("app".to_string(), "url_for".to_string(),
+                       "routing".to_string(), "url_for".to_string());
+    analyzer.add_import("app".to_string(), "before_request".to_string(),
+                       "middleware".to_string(), "before_request".to_string());
+    analyzer.add_import("app".to_string(), "after_request".to_string(),
+                       "middleware".to_string(), "after_request".to_string());
+
+    let dead_code = analyzer.find_dead_code();
+    let dead_names: Vec<String> = dead_code.iter().map(|(_, name)| name.clone()).collect();
+
+    // Verify dead functions
+    assert!(dead_names.contains(&"unused_routing_fn".to_string()), "unused_routing_fn should be dead");
+    assert!(dead_names.contains(&"unused_middleware_fn".to_string()), "unused_middleware_fn should be dead");
+    assert!(dead_names.contains(&"unused_app_fn".to_string()), "unused_app_fn should be dead");
+    assert!(dead_names.contains(&"redirect".to_string()), "redirect should be dead (not called)");
+    assert!(dead_names.contains(&"error_handler".to_string()), "error_handler should be dead (not called)");
+    assert!(dead_names.contains(&"register_blueprint".to_string()), "register_blueprint should be dead (not called)");
+
+    // Note: url_for and after_request are imported but may be marked as live due to conservative approach
+
+    // Verify live functions
+    assert!(!dead_names.contains(&"test_routing".to_string()), "test_routing should be live (entry point)");
+    assert!(!dead_names.contains(&"test_middleware".to_string()), "test_middleware should be live (entry point)");
+    assert!(!dead_names.contains(&"test_app".to_string()), "test_app should be live (entry point)");
+    assert!(!dead_names.contains(&"create_app".to_string()), "create_app should be live (called from test_app)");
+    assert!(!dead_names.contains(&"run_app".to_string()), "run_app should be live (called from test_app)");
+    assert!(!dead_names.contains(&"route".to_string()), "route should be live (called from create_app)");
+    assert!(!dead_names.contains(&"before_request".to_string()), "before_request should be live");
+}
