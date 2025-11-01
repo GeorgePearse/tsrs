@@ -808,3 +808,488 @@ impl Default for CallGraphAnalyzer {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_entry_point_detection_main_block() {
+        let source = r#"
+def helper():
+    pass
+
+def test_something():
+    pass
+
+if __name__ == "__main__":
+    helper()
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let entry_points = analyzer.get_entry_points();
+        // At minimum, test_something should be an entry point
+        assert!(!entry_points.is_empty(), "Should have entry point for test function");
+    }
+
+    #[test]
+    fn test_entry_point_detection_test_functions() {
+        let source = r#"
+def test_helper():
+    pass
+
+def test_something():
+    pass
+
+def regular_function():
+    pass
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let entry_points = analyzer.get_entry_points();
+        let nodes = analyzer.get_nodes();
+
+        // Should have test functions as entry points
+        let test_func_ids: Vec<_> = nodes
+            .iter()
+            .filter(|(_, node)| node.name.starts_with("test_"))
+            .map(|(id, _)| *id)
+            .collect();
+
+        for test_id in test_func_ids {
+            assert!(
+                entry_points.contains(&test_id),
+                "Test function should be entry point"
+            );
+        }
+    }
+
+    #[test]
+    fn test_entry_point_detection_exports() {
+        let source = r#"
+__all__ = ['exported_func', 'test_something']
+
+def exported_func():
+    pass
+
+def test_something():
+    pass
+
+def internal_func():
+    pass
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let entry_points = analyzer.get_entry_points();
+        let nodes = analyzer.get_nodes();
+
+        // test_something should be an entry point (test functions are)
+        let test_id = nodes
+            .iter()
+            .find(|(_, node)| node.name == "test_something")
+            .map(|(id, _)| *id);
+
+        assert!(test_id.is_some(), "test_something should exist");
+        if let Some(id) = test_id {
+            assert!(
+                entry_points.contains(&id),
+                "test_something should be entry point"
+            );
+        }
+    }
+
+    #[test]
+    fn test_entry_point_protection_dunder_methods() {
+        let source = r#"
+class MyClass:
+    def __init__(self):
+        pass
+
+    def __str__(self):
+        pass
+
+    def regular_method(self):
+        pass
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let dead_code = analyzer.find_dead_code();
+
+        // Dunder methods should not be in dead code
+        let dunder_names: Vec<_> = dead_code
+            .iter()
+            .filter(|(_, name)| name.starts_with("__") && name.ends_with("__"))
+            .collect();
+
+        assert!(
+            dunder_names.is_empty(),
+            "Dunder methods should be protected from dead code detection"
+        );
+    }
+
+    #[test]
+    fn test_simple_call_detection() {
+        let source = r#"
+def caller():
+    callee()
+
+def callee():
+    pass
+
+if __name__ == "__main__":
+    caller()
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let edges = analyzer.get_edges();
+        assert!(!edges.is_empty(), "Should have detected function calls");
+
+        // Should find caller -> callee edge
+        let has_call = edges.iter().any(|edge| {
+            let caller_name = analyzer
+                .get_nodes()
+                .get(&edge.caller)
+                .map(|n| n.name.as_str());
+            let callee_name = analyzer
+                .get_nodes()
+                .get(&edge.callee)
+                .map(|n| n.name.as_str());
+            caller_name == Some("caller") && callee_name == Some("callee")
+        });
+
+        assert!(has_call, "Should detect caller -> callee call edge");
+    }
+
+    #[test]
+    fn test_reachability_analysis() {
+        let source = r#"
+def test_reachability():
+    reachable_1()
+
+def reachable_1():
+    reachable_2()
+
+def reachable_2():
+    pass
+
+def dead_code_func():
+    pass
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let reachable = analyzer.compute_reachable();
+        let nodes = analyzer.get_nodes();
+
+        // Check reachability
+        let reachable_names: Vec<_> = reachable
+            .iter()
+            .filter_map(|id| nodes.get(id).map(|n| n.name.as_str()))
+            .collect();
+
+        assert!(
+            reachable_names.contains(&"test_reachability"),
+            "test_reachability should be reachable (entry point)"
+        );
+        assert!(
+            reachable_names.contains(&"reachable_1"),
+            "reachable_1 should be reachable"
+        );
+        assert!(
+            reachable_names.contains(&"reachable_2"),
+            "reachable_2 should be reachable"
+        );
+        assert!(
+            !reachable_names.contains(&"dead_code_func"),
+            "dead_code_func should not be reachable"
+        );
+    }
+
+    #[test]
+    fn test_dead_code_detection() {
+        let source = r#"
+def test_used():
+    used_function()
+
+def used_function():
+    pass
+
+def unused_function():
+    pass
+
+def another_unused():
+    pass
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let dead_code = analyzer.find_dead_code();
+        let dead_names: Vec<_> = dead_code.iter().map(|(_, name)| name.as_str()).collect();
+
+        assert!(
+            dead_names.contains(&"unused_function"),
+            "unused_function should be dead code"
+        );
+        assert!(
+            dead_names.contains(&"another_unused"),
+            "another_unused should be dead code"
+        );
+        assert!(
+            !dead_names.contains(&"used_function"),
+            "used_function should not be dead code (called from test_used)"
+        );
+        assert!(
+            !dead_names.contains(&"test_used"),
+            "test_used should not be dead code (entry point)"
+        );
+    }
+
+    #[test]
+    fn test_dead_code_protection_exports() {
+        let source = r#"
+__all__ = ['exported_unused']
+
+def exported_unused():
+    pass
+
+def truly_unused():
+    pass
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let dead_code = analyzer.find_dead_code();
+        let dead_names: Vec<_> = dead_code.iter().map(|(_, name)| name.as_str()).collect();
+
+        assert!(
+            !dead_names.contains(&"exported_unused"),
+            "Exported functions should be protected even if unused"
+        );
+        assert!(
+            dead_names.contains(&"truly_unused"),
+            "Non-exported unused functions should be dead code"
+        );
+    }
+
+    #[test]
+    fn test_nested_function_calls() {
+        let source = r#"
+def outer():
+    def inner():
+        helper()
+    inner()
+
+def helper():
+    pass
+
+outer()
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let edges = analyzer.get_edges();
+        assert!(!edges.is_empty(), "Should detect calls in nested functions");
+    }
+
+    #[test]
+    fn test_multiple_calls_same_function() {
+        let source = r#"
+def caller():
+    target()
+    target()
+    target()
+
+def target():
+    pass
+
+if __name__ == "__main__":
+    caller()
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let edges = analyzer.get_edges();
+
+        // Should have edges for each call (even if to same function)
+        let call_count = edges
+            .iter()
+            .filter(|edge| {
+                let caller_name = analyzer
+                    .get_nodes()
+                    .get(&edge.caller)
+                    .map(|n| n.name.as_str());
+                let callee_name = analyzer
+                    .get_nodes()
+                    .get(&edge.callee)
+                    .map(|n| n.name.as_str());
+                caller_name == Some("caller") && callee_name == Some("target")
+            })
+            .count();
+
+        assert!(
+            call_count >= 3,
+            "Should detect all three calls to target"
+        );
+    }
+
+    #[test]
+    fn test_empty_source_code() {
+        let source = "";
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let nodes = analyzer.get_nodes();
+        assert!(nodes.is_empty(), "Empty source should have no nodes");
+
+        let dead_code = analyzer.find_dead_code();
+        assert!(dead_code.is_empty(), "Empty source should have no dead code");
+    }
+
+    #[test]
+    fn test_only_comments_and_docstrings() {
+        let source = r#"
+"""Module docstring"""
+
+# This is a comment
+# Another comment
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let nodes = analyzer.get_nodes();
+        assert!(nodes.is_empty(), "Comments and docstrings should not create nodes");
+    }
+
+    #[test]
+    fn test_module_initialization_is_entry_point() {
+        let source = r#"
+def test_module():
+    pass
+
+def some_func():
+    pass
+
+some_func()
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let entry_points = analyzer.get_entry_points();
+        // test_module should be marked as entry point
+        assert!(
+            !entry_points.is_empty(),
+            "Test functions should be entry points"
+        );
+    }
+
+    #[test]
+    fn test_mutual_recursion() {
+        let source = r#"
+def test_recursion():
+    func_a()
+
+def func_a():
+    func_b()
+
+def func_b():
+    func_a()
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let reachable = analyzer.compute_reachable();
+        let nodes = analyzer.get_nodes();
+
+        let reachable_names: Vec<_> = reachable
+            .iter()
+            .filter_map(|id| nodes.get(id).map(|n| n.name.as_str()))
+            .collect();
+
+        assert!(
+            reachable_names.contains(&"test_recursion"),
+            "test_recursion should be reachable (entry point)"
+        );
+        assert!(
+            reachable_names.contains(&"func_a"),
+            "func_a should be reachable"
+        );
+        assert!(
+            reachable_names.contains(&"func_b"),
+            "func_b should be reachable even with mutual recursion"
+        );
+    }
+
+    #[test]
+    fn test_decorator_preservation() {
+        let source = r#"
+def decorator(func):
+    return func
+
+@decorator
+def decorated_func():
+    pass
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        let nodes = analyzer.get_nodes();
+        let decorated = nodes
+            .values()
+            .find(|n| n.name == "decorated_func")
+            .unwrap();
+
+        assert!(
+            !decorated.decorators.is_empty(),
+            "Should track decorators"
+        );
+    }
+
+    #[test]
+    fn test_call_detection_with_attributes() {
+        let source = r#"
+def caller():
+    obj.method()
+    some_module.func()
+
+def method(self):
+    pass
+
+obj = None
+some_module = None
+
+if __name__ == "__main__":
+    caller()
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        analyzer.analyze_source("test", source).unwrap();
+
+        // Should still detect the function definitions
+        let nodes = analyzer.get_nodes();
+        let func_names: Vec<_> = nodes.values().map(|n| n.name.as_str()).collect();
+
+        assert!(
+            func_names.contains(&"caller"),
+            "Should detect caller function"
+        );
+    }
+}

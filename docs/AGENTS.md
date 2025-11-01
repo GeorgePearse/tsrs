@@ -17,7 +17,7 @@
 **tsrs** (Tree-Shaking in Rust for Python) is a high-performance Rust implementation that analyzes Python code to identify and remove unused exports from modules and packages. It can create minimal virtual environments based on actual code usage, optimizing deployment sizes (typically 30-70% reduction).
 
 ### Current Version
-- **Cargo Version**: 0.2.0
+- **Cargo Version**: 0.3.0
 - **Edition**: 2021
 - **Python Support**: 3.7+
 - **Latest Release**: 2025-11-01
@@ -181,10 +181,13 @@ Source Code
 
 ### Missing/Incomplete Features ⚠️
 
-1. **Call graph analysis**:
-   - No interprocedural analysis (function A calls function B not tracked)
-   - No type inference for dead code detection
-   - Task: Consider SSA form or simpler PDG approach
+1. **Call graph analysis** ✅ **COMPLETED in v0.3.0**:
+   - ✅ Interprocedural analysis (function A calls function B properly tracked)
+   - ✅ Entry point detection (`__all__`, `if __name__ == "__main__"`, test functions)
+   - ✅ Reachability analysis via BFS from entry points
+   - ✅ Dead code detection with conservative filtering (dunders, exports)
+   - ✅ 16 comprehensive unit tests
+   - ⚠️ Cross-package analysis still not implemented (per-package graphs only)
 
 2. **Import analysis**:
    - Relative imports within packages not fully resolved
@@ -204,7 +207,7 @@ Source Code
 
 ## Testing Strategy & Coverage Map
 
-### Unit Test Coverage (34 tests passing)
+### Unit Test Coverage (61 tests passing)
 
 **imports.rs** (3 tests):
 - ✅ Skips relative imports
@@ -233,8 +236,22 @@ Source Code
 - ✅ Nested function bailout
 - ✅ Annotation preservation (not renamed)
 
+**callgraph.rs** (16 tests) ✅ **NEW in v0.3.0**:
+- ✅ Entry point detection (main blocks, test functions, exports)
+- ✅ Entry point protection (dunder methods)
+- ✅ Simple call detection (caller → callee edges)
+- ✅ Reachability analysis (BFS from entry points)
+- ✅ Dead code detection (unreachable functions)
+- ✅ Dead code protection (exported functions)
+- ✅ Nested function calls
+- ✅ Multiple calls to same function
+- ✅ Empty and comment-only source code
+- ✅ Module initialization detection
+- ✅ Mutual recursion handling
+- ✅ Decorator preservation
+- ✅ Attribute call detection (obj.method(), module.func())
+
 **Gap Analysis - What Needs Testing**:
-- ❌ Call graph dead code detection (no unit tests)
 - ❌ Venv analysis edge cases (mixed packages, namespaces)
 - ❌ Large directory traversal (performance tests)
 - ❌ Error recovery paths

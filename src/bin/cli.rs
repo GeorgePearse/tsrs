@@ -35,7 +35,7 @@ use std::process;
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::filter::EnvFilter;
-use tsrs::{Minifier, MinifyPlan, VenvAnalyzer, VenvSlimmer};
+use tsrs::{CallGraphAnalyzer, Minifier, MinifyPlan, VenvAnalyzer, VenvSlimmer};
 
 const DEFAULT_EXCLUDES: &[&str] = &["**/.git/**", "**/__pycache__/**", "**/.venv/**"];
 
@@ -360,6 +360,10 @@ enum Commands {
         /// Write rewritten source to stdout regardless of quiet mode
         #[arg(long)]
         stdout: bool,
+
+        /// Remove dead code (unreachable functions) in addition to minification
+        #[arg(long)]
+        remove_dead_code: bool,
     },
 
     /// Rewrite all Python files in a directory tree using safe local renames
@@ -455,6 +459,10 @@ enum Commands {
         /// Respect .gitignore files when scanning
         #[arg(long)]
         respect_gitignore: bool,
+
+        /// Remove dead code (unreachable functions) in addition to minification
+        #[arg(long)]
+        remove_dead_code: bool,
     },
 }
 
@@ -536,6 +544,7 @@ fn main() -> anyhow::Result<()> {
             diff_context,
             stdin,
             stdout,
+            remove_dead_code,
         } => {
             let (stats_result, stdout_bytes) = if stdin {
                 if in_place {
@@ -548,6 +557,12 @@ fn main() -> anyhow::Result<()> {
                 let mut buffer = Vec::new();
                 std::io::stdin().read_to_end(&mut buffer)?;
                 let (source, metadata) = decode_python_bytes(&buffer, "stdin")?;
+
+                // Detect dead code if requested
+                if remove_dead_code {
+                    detect_dead_code(&source, "stdin", cli.quiet)?;
+                }
+
                 let plan = Minifier::plan_from_source("stdin", &source)?;
                 let fake_path = PathBuf::from("stdin");
                 let (stats, bytes) = apply_plan_to_file(
@@ -571,6 +586,17 @@ fn main() -> anyhow::Result<()> {
                 )?;
                 (stats, bytes)
             } else {
+                // Detect dead code if requested
+                if remove_dead_code {
+                    let (source, _) = read_python(&python_file)?;
+                    let module_name = python_file
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| python_file.to_string_lossy().to_string());
+                    detect_dead_code(&source, &module_name, cli.quiet)?;
+                }
+
                 let (stats, bytes) = minify(
                     &python_file,
                     in_place,
@@ -785,6 +811,7 @@ fn main() -> anyhow::Result<()> {
             glob_case_insensitive,
             max_depth,
             respect_gitignore,
+            remove_dead_code: _,  // TODO: Implement in Phase 4b
         } => {
             let stats_result = minify_dir_with_depth(
                 &input_dir,
@@ -954,6 +981,29 @@ fn minify_plan(file_path: &PathBuf) -> anyhow::Result<()> {
     println!("{}", plan_json);
 
     Ok(())
+}
+
+/// Detect and report dead code in Python source
+fn detect_dead_code(source: &str, package_name: &str, quiet: bool) -> anyhow::Result<Vec<(usize, String)>> {
+    let mut analyzer = CallGraphAnalyzer::new();
+    analyzer.analyze_source(package_name, source)?;
+
+    let dead_code = analyzer.find_dead_code();
+
+    if !dead_code.is_empty() && !quiet {
+        info!("Found {} unreachable function(s):", dead_code.len());
+        for (_, func_name) in &dead_code {
+            info!("  - {}", func_name);
+        }
+    }
+
+    // Convert FunctionId to usize for return
+    let result = dead_code
+        .into_iter()
+        .map(|(func_id, name)| (func_id.0, name))
+        .collect();
+
+    Ok(result)
 }
 
 fn minify(

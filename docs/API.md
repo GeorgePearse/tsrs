@@ -157,70 +157,172 @@ impl ImportSet {
 }
 ```
 
-### callgraph Module
+### callgraph Module (v0.3.0+)
 
-Analyze function definitions and calls to build call graphs.
+Build function call graphs with interprocedural analysis and detect unreachable (dead) code.
 
 ```rust
 use tsrs::callgraph::CallGraphAnalyzer;
 
 // Create analyzer
-let mut analyzer = CallGraphAnalyzer::new()?;
+let mut analyzer = CallGraphAnalyzer::new();
 
-// Analyze a Python file
-analyzer.analyze_file("module.py", "mypackage")?;
+// Analyze Python source code
+let source = r#"
+def test_module():
+    helper()
 
-// Find unused functions
-let unused = analyzer.find_unused_functions("mypackage");
-for func_name in unused {
-    println!("Unused: {}", func_name);
+def helper():
+    pass
+
+def unused_func():
+    pass
+"#;
+
+analyzer.analyze_source("mypackage", source)?;
+
+// Detect dead code (unreachable from entry points)
+let dead_code = analyzer.find_dead_code();
+for (_, func_name) in dead_code {
+    println!("Dead code: {}", func_name);
 }
 
-// Find external dependencies
-let external = analyzer.find_external_dependencies();
-for dep in external {
-    println!("External dependency: {}", dep);
+// Compute reachable functions from entry points
+let reachable = analyzer.compute_reachable();
+println!("Reachable functions: {:?}", reachable);
+
+// Get entry points (test functions, main blocks, exports)
+let entry_points = analyzer.get_entry_points();
+println!("Entry points: {:?}", entry_points);
+```
+
+#### CallGraphAnalyzer - Core Types
+
+```rust
+/// Unique function identifier
+pub struct FunctionId(pub usize);
+
+/// Defines the kind of entry point
+pub enum EntryPointKind {
+    ModuleInit,    // Module-level code
+    ScriptMain,    // if __name__ == "__main__" blocks
+    TestFunction,  // Functions starting with test_
+    DunderMethod,  // Special methods like __init__
+    PublicExport,  // Functions in __all__
+    Regular,       // Regular function (not entry point)
+}
+
+/// Represents a function in the call graph
+pub struct CallGraphNode {
+    pub id: FunctionId,
+    pub name: String,
+    pub package: String,
+    pub location: SourceLocation,
+    pub kind: FunctionKind,
+    pub entry_point: EntryPointKind,
+    pub decorators: Vec<String>,
+    pub is_special: bool,
+}
+
+/// Represents a call from one function to another
+pub struct CallEdge {
+    pub caller: FunctionId,
+    pub callee: FunctionId,
+    pub location: SourceLocation,
 }
 ```
 
-#### CallGraphAnalyzer
+#### CallGraphAnalyzer - API
 
 ```rust
 pub struct CallGraphAnalyzer {
-    graphs: HashMap<String, PackageCallGraph>,
+    // Private implementation details
 }
 
 impl CallGraphAnalyzer {
     /// Create a new call graph analyzer
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if regex compilation fails.
-    pub fn new() -> Result<Self>;
+    #[must_use]
+    pub fn new() -> Self;
 
     /// Analyze a Python file and build call graph
     ///
     /// # Errors
     ///
-    /// Returns an error if the file cannot be read.
+    /// Returns an error if the file cannot be read or parsed.
     pub fn analyze_file<P: AsRef<Path>>(&mut self, path: P, package: &str) -> Result<()>;
 
-    /// Get all call graphs
-    #[must_use]
-    pub fn get_graphs(&self) -> &HashMap<String, PackageCallGraph>;
+    /// Analyze Python source code and build call graph
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if parsing fails.
+    pub fn analyze_source(&mut self, package: &str, source: &str) -> Result<()>;
 
-    /// Get call graph for a specific package
+    /// Get all function nodes in the graph
     #[must_use]
-    pub fn get_graph(&self, package: &str) -> Option<&PackageCallGraph>;
+    pub fn get_nodes(&self) -> &HashMap<FunctionId, CallGraphNode>;
 
-    /// Find unused functions in a package
+    /// Get all call edges in the graph
     #[must_use]
-    pub fn find_unused_functions(&self, package: &str) -> HashSet<String>;
+    pub fn get_edges(&self) -> &[CallEdge];
 
-    /// Find all external dependencies
+    /// Get identified entry points
     #[must_use]
-    pub fn find_external_dependencies(&self) -> HashSet<String>;
+    pub fn get_entry_points(&self) -> &HashSet<FunctionId>;
+
+    /// Compute reachable functions from entry points (BFS)
+    #[must_use]
+    pub fn compute_reachable(&self) -> HashSet<FunctionId>;
+
+    /// Find dead code (functions unreachable from entry points)
+    ///
+    /// # Conservative Filtering
+    ///
+    /// This method is intentionally conservative and protects:
+    /// - Dunder methods (__init__, __str__, etc.)
+    /// - Functions in __all__ exports
+    /// - Test functions and main blocks
+    ///
+    /// Returns `Vec<(FunctionId, String)>` where String is the function name.
+    #[must_use]
+    pub fn find_dead_code(&self) -> Vec<(FunctionId, String)>;
 }
+
+impl Default for CallGraphAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+```
+
+#### Example: Detecting Dead Code
+
+```rust
+use tsrs::callgraph::CallGraphAnalyzer;
+
+let source = r#"
+__all__ = ['public_func']
+
+def public_func():
+    pass
+
+def internal_helper():
+    pass
+
+def truly_unused():
+    pass
+"#;
+
+let mut analyzer = CallGraphAnalyzer::new();
+analyzer.analyze_source("example", source)?;
+
+// Find dead code
+let dead_code = analyzer.find_dead_code();
+assert_eq!(dead_code.len(), 1); // Only truly_unused
+
+// public_func is protected (in __all__)
+// internal_helper has no calls to it, but we don't mark it dead
+// because there's no entry point calling anything
 ```
 
 ### slim Module
