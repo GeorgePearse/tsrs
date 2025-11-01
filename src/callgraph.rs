@@ -249,16 +249,124 @@ impl CallGraphAnalyzer {
         let suite = ast::Suite::parse(source, "<source>")
             .map_err(|e| TsrsError::ParseError(format!("Failed to parse Python: {e}")))?;
 
-        // First pass: register all functions
+        // First pass: detect exports and entry points from module level
+        self.detect_module_exports(package, &suite)?;
+        self.detect_main_block(&suite)?;
+
+        // Second pass: register all functions
         self.register_module_functions_suite(package, &suite)?;
 
-        // Second pass: build call edges
+        // Third pass: build call edges
         self.extract_calls_suite(package, &suite)?;
 
         // Also maintain legacy PackageCallGraph for backward compatibility
         self.build_legacy_graph(package);
 
         Ok(())
+    }
+
+    /// Detect `__all__` exports and module-level code
+    fn detect_module_exports(&mut self, package: &str, suite: &[ast::Stmt]) -> Result<()> {
+        let mut exports = HashSet::new();
+
+        for stmt in suite {
+            // Look for __all__ assignments
+            if let ast::Stmt::Assign(assign) = stmt {
+                for target in &assign.targets {
+                    if let ast::Expr::Name(name_expr) = target {
+                        if name_expr.id.as_str() == "__all__" {
+                            // Try to extract list of strings
+                            self.extract_all_exports(&assign.value, &mut exports)?;
+                        }
+                    }
+                }
+            }
+
+            // Also mark any function at module level as having module initialization
+            // (it can be called during import)
+            if matches!(
+                stmt,
+                ast::Stmt::FunctionDef(_) | ast::Stmt::AsyncFunctionDef(_)
+            ) {
+                // These are detected separately
+            }
+        }
+
+        if !exports.is_empty() {
+            self.public_exports.insert(package.to_string(), exports);
+        }
+
+        Ok(())
+    }
+
+    /// Extract list of names from __all__ = [...] assignment
+    fn extract_all_exports(&self, expr: &ast::Expr, exports: &mut HashSet<String>) -> Result<()> {
+        match expr {
+            ast::Expr::List(list_expr) => {
+                for element in &list_expr.elts {
+                    if let ast::Expr::Constant(const_expr) = element {
+                        if let ast::Constant::Str(s) = &const_expr.value {
+                            exports.insert(s.clone());
+                        }
+                    }
+                }
+            }
+            ast::Expr::Tuple(tuple_expr) => {
+                for element in &tuple_expr.elts {
+                    if let ast::Expr::Constant(const_expr) = element {
+                        if let ast::Constant::Str(s) = &const_expr.value {
+                            exports.insert(s.clone());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Detect if __name__ == "__main__" block (script entry point)
+    fn detect_main_block(&mut self, suite: &[ast::Stmt]) -> Result<()> {
+        for stmt in suite {
+            // Look for: if __name__ == "__main__": ...
+            if let ast::Stmt::If(if_stmt) = stmt {
+                if self.is_main_guard(&if_stmt.test) {
+                    // Mark that this module has a main block
+                    // In a full implementation, we'd mark all statements in the main block
+                    // as entry points or ScriptMain kind
+                    return Ok(());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Check if expression matches `__name__ == "__main__"` pattern
+    fn is_main_guard(&self, expr: &ast::Expr) -> bool {
+        match expr {
+            ast::Expr::Compare(cmp) => {
+                // Check for: __name__ == "__main__"
+                // Be conservative: if we see __name__ and __main__ in a comparison, assume it's a main guard
+                if cmp.comparators.len() != 1 {
+                    return false;
+                }
+
+                let left_is_name = if let ast::Expr::Name(n) = cmp.left.as_ref() {
+                    n.id.as_str() == "__name__"
+                } else {
+                    false
+                };
+
+                let right_is_main = if let ast::Expr::Constant(c) = &cmp.comparators[0] {
+                    matches!(&c.value, ast::Constant::Str(s) if s == "__main__")
+                } else {
+                    false
+                };
+
+                left_is_name && right_is_main
+            }
+            _ => false,
+        }
     }
 
     /// Register all functions in a suite (module body)
