@@ -399,6 +399,11 @@ fn slim_keeps_used_package_wildcard_import() -> anyhow::Result<()> {
 }
 
 #[test]
+fn slim_keeps_used_package_reexport_attr() -> anyhow::Result<()> {
+    run_slim_case("project_reexport_get_tool")
+}
+
+#[test]
 fn slim_keeps_used_package_alias_function_import() -> anyhow::Result<()> {
     run_slim_case("project_alias_function")
 }
@@ -482,8 +487,14 @@ fn slim_prunes_unused_metadata() -> anyhow::Result<()> {
 fn slim_preserves_package_resources() -> anyhow::Result<()> {
     let (_temp, slim_dir) = run_slim_case_internal("project_resource_access")?;
     let site_packages = site_packages_path(&slim_dir)?;
-    let resource_path = site_packages.join("used_pkg").join("resources").join("config.json");
-    assert!(resource_path.exists(), "expected config.json to be copied to slim venv");
+    let resource_path = site_packages
+        .join("used_pkg")
+        .join("resources")
+        .join("config.json");
+    assert!(
+        resource_path.exists(),
+        "expected config.json to be copied to slim venv"
+    );
 
     Ok(())
 }
@@ -497,7 +508,127 @@ fn slim_preserves_nested_template_resources() -> anyhow::Result<()> {
         .join("resources")
         .join("templates")
         .join("welcome.txt");
-    assert!(template_path.exists(), "expected welcome.txt to be copied to slim venv");
+    assert!(
+        template_path.exists(),
+        "expected welcome.txt to be copied to slim venv"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn slim_preserves_pkgutil_resource_access() -> anyhow::Result<()> {
+    let (_temp, slim_dir) = run_slim_case_internal("project_resource_pkgutil")?;
+    let site_packages = site_packages_path(&slim_dir)?;
+    let resource_path = site_packages
+        .join("used_pkg")
+        .join("resources")
+        .join("config.json");
+    assert!(
+        resource_path.exists(),
+        "expected config.json to be present for pkgutil access"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn slim_preserves_resources_files_api() -> anyhow::Result<()> {
+    let (_temp, slim_dir) = run_slim_case_internal("project_resource_files")?;
+    let site_packages = site_packages_path(&slim_dir)?;
+    let resource_path = site_packages
+        .join("used_pkg")
+        .join("resources")
+        .join("config.json");
+    assert!(
+        resource_path.exists(),
+        "expected config.json to remain for files() API access"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn slim_prunes_dynamic_imported_package() -> anyhow::Result<()> {
+    let (_temp, slim_dir) = run_slim_case_internal("project_dynamic_import")?;
+    let site_packages = site_packages_path(&slim_dir)?;
+    let used_present = package_exists(&site_packages, "used_pkg")?;
+    assert!(
+        !used_present,
+        "tsrs should surface dynamic import limitations by pruning used_pkg"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn slim_prunes_type_checking_import() -> anyhow::Result<()> {
+    let (_temp, slim_dir) = run_slim_case_internal("project_type_checking_import")?;
+    let site_packages = site_packages_path(&slim_dir)?;
+    let used_present = package_exists(&site_packages, "used_pkg")?;
+    assert!(
+        !used_present,
+        "TYPE_CHECKING-only imports should be pruned from the slim venv"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn slim_preserves_native_library_files() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+
+    let fixture_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_packages/test_slim_packages");
+    let used_native_src = fixture_root.join("used_native");
+    let unused_src = fixture_root.join("unused_pkg");
+    let project_src = fixture_root.join("project_native_resource");
+
+    let used_native_dst = temp.path().join("used_native");
+    copy_dir_filtered(&used_native_src, &used_native_dst)?;
+    let unused_dst = temp.path().join("unused_pkg");
+    copy_dir_filtered(&unused_src, &unused_dst)?;
+    let project_dir = temp.path().join("project_native_resource");
+    copy_dir_filtered(&project_src, &project_dir)?;
+
+    let venv_dir = temp.path().join("venv");
+    create_venv(&venv_dir)?;
+    install_package(&venv_dir, &used_native_dst)?;
+    install_package(&venv_dir, &unused_dst)?;
+
+    let slim_dir = temp.path().join("slim-venv");
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("slim")
+        .arg(&project_dir)
+        .arg(&venv_dir)
+        .arg("--output")
+        .arg(&slim_dir)
+        .output()
+        .context("failed to execute tsrs-cli slim for native resource project")?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "tsrs-cli slim exited with {}. stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let site_packages = site_packages_path(&slim_dir)?;
+    let native_lib = site_packages
+        .join("used_native")
+        .join("libs")
+        .join("libdummy.so");
+    assert!(
+        native_lib.exists(),
+        "expected libdummy.so to be copied to the slim virtual environment"
+    );
+
+    let unused_present = package_exists(&site_packages, "unused_pkg")?;
+    assert!(
+        !unused_present,
+        "expected unused_pkg to be pruned from {}",
+        site_packages.display()
+    );
 
     Ok(())
 }
@@ -594,6 +725,59 @@ fn slim_keeps_single_module_distribution() -> anyhow::Result<()> {
     let site_packages = site_packages_path(&slim_dir)?;
     assert!(site_packages.join("used_mod.py").exists());
     assert!(!package_exists(&site_packages, "unused_pkg")?);
+
+    Ok(())
+}
+
+#[test]
+fn slim_keeps_dash_pkg_distribution() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let fixture_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_packages/test_slim_packages");
+    let dash_src = fixture_root.join("dash_pkg");
+    let unused_src = fixture_root.join("unused_pkg");
+    let project_src = fixture_root.join("project_dash_import");
+
+    let dash_dst = temp.path().join("dash_pkg");
+    copy_dir_filtered(&dash_src, &dash_dst)?;
+    let unused_dst = temp.path().join("unused_pkg");
+    copy_dir_filtered(&unused_src, &unused_dst)?;
+    let project_dir = temp.path().join("project_dash_import");
+    copy_dir_filtered(&project_src, &project_dir)?;
+
+    let venv_dir = temp.path().join("venv");
+    create_venv(&venv_dir)?;
+    install_package(&venv_dir, &dash_dst)?;
+    install_package(&venv_dir, &unused_dst)?;
+
+    let slim_dir = temp.path().join("slim-venv");
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("slim")
+        .arg(&project_dir)
+        .arg(&venv_dir)
+        .arg("--output")
+        .arg(&slim_dir)
+        .output()
+        .context("failed to execute tsrs-cli slim for dash-pkg project")?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "tsrs-cli slim exited with {}. stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let site_packages = site_packages_path(&slim_dir)?;
+    assert!(
+        package_exists(&site_packages, "dash_pkg")?,
+        "expected dash_pkg to be present in {}",
+        site_packages.display()
+    );
+    assert!(
+        !package_exists(&site_packages, "unused_pkg")?,
+        "expected unused_pkg to be pruned from {}",
+        site_packages.display()
+    );
 
     Ok(())
 }
@@ -744,6 +928,56 @@ fn slim_keeps_only_used_pkg2() -> anyhow::Result<()> {
 }
 
 #[test]
+fn slim_keeps_namespace_package_split_across_distributions() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let fixture_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_packages/test_slim_packages");
+    let used_ns_src = fixture_root.join("used_ns_pkg");
+    let used_ns_part_src = fixture_root.join("used_ns_pkg_part");
+    let unused_src = fixture_root.join("unused_pkg");
+    let project_src = fixture_root.join("project_namespace_multipkg");
+
+    let used_ns_dst = temp.path().join("used_ns_pkg");
+    copy_dir_filtered(&used_ns_src, &used_ns_dst)?;
+    let used_ns_part_dst = temp.path().join("used_ns_pkg_part");
+    copy_dir_filtered(&used_ns_part_src, &used_ns_part_dst)?;
+    let unused_dst = temp.path().join("unused_pkg");
+    copy_dir_filtered(&unused_src, &unused_dst)?;
+    let project_dir = temp.path().join("project_namespace_multipkg");
+    copy_dir_filtered(&project_src, &project_dir)?;
+
+    let venv_dir = temp.path().join("venv");
+    create_venv(&venv_dir)?;
+    install_package(&venv_dir, &used_ns_dst)?;
+    install_package(&venv_dir, &used_ns_part_dst)?;
+    install_package(&venv_dir, &unused_dst)?;
+
+    let slim_dir = temp.path().join("slim-venv");
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("slim")
+        .arg(&project_dir)
+        .arg(&venv_dir)
+        .arg("--output")
+        .arg(&slim_dir)
+        .output()
+        .context("failed to execute tsrs-cli slim for project_namespace_multipkg")?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "tsrs-cli slim exited with {}. stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let site_packages = site_packages_path(&slim_dir)?;
+    assert!(site_packages.join("used_ns_pkg").join("sub").exists());
+    assert!(site_packages.join("used_ns_pkg").join("extra").exists());
+    assert!(!package_exists(&site_packages, "unused_pkg")?);
+
+    Ok(())
+}
+
+#[test]
 fn slim_keeps_used_transitive_dependency() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let fixture_root =
@@ -788,6 +1022,156 @@ fn slim_keeps_used_transitive_dependency() -> anyhow::Result<()> {
     let site_packages = site_packages_path(&slim_dir)?;
     assert!(package_exists(&site_packages, "used_pkg_transitive")?);
     assert!(package_exists(&site_packages, "extra_dep")?);
+    assert!(!package_exists(&site_packages, "unused_pkg")?);
+
+    Ok(())
+}
+
+#[test]
+fn slim_prunes_unused_module_from_py_modules_distribution() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let fixture_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_packages/test_slim_packages");
+    let multi_mod_src = fixture_root.join("multi_mod");
+    let unused_src = fixture_root.join("unused_pkg");
+    let project_src = fixture_root.join("project_select_alpha");
+
+    let multi_mod_dst = temp.path().join("multi_mod");
+    copy_dir_filtered(&multi_mod_src, &multi_mod_dst)?;
+    let unused_dst = temp.path().join("unused_pkg");
+    copy_dir_filtered(&unused_src, &unused_dst)?;
+    let project_dir = temp.path().join("project_select_alpha");
+    copy_dir_filtered(&project_src, &project_dir)?;
+
+    let venv_dir = temp.path().join("venv");
+    create_venv(&venv_dir)?;
+    install_package(&venv_dir, &multi_mod_dst)?;
+    install_package(&venv_dir, &unused_dst)?;
+
+    let slim_dir = temp.path().join("slim-venv");
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("slim")
+        .arg(&project_dir)
+        .arg(&venv_dir)
+        .arg("--output")
+        .arg(&slim_dir)
+        .output()
+        .context("failed to execute tsrs-cli slim for project_select_alpha")?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "tsrs-cli slim exited with {}. stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let site_packages = site_packages_path(&slim_dir)?;
+    assert!(site_packages.join("alpha.py").exists());
+    assert!(!site_packages.join("beta.py").exists());
+    assert!(!package_exists(&site_packages, "unused_pkg")?);
+
+    Ok(())
+}
+
+#[test]
+fn slim_keeps_implicit_namespace_package() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let fixture_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_packages/test_slim_packages");
+    let used_ns_src = fixture_root.join("used_ns_implicit");
+    let unused_src = fixture_root.join("unused_pkg");
+    let project_src = fixture_root.join("project_implicit_namespace_import");
+
+    let used_ns_dst = temp.path().join("used_ns_implicit");
+    copy_dir_filtered(&used_ns_src, &used_ns_dst)?;
+    let unused_dst = temp.path().join("unused_pkg");
+    copy_dir_filtered(&unused_src, &unused_dst)?;
+    let project_dir = temp.path().join("project_implicit_namespace_import");
+    copy_dir_filtered(&project_src, &project_dir)?;
+
+    let venv_dir = temp.path().join("venv");
+    create_venv(&venv_dir)?;
+    install_package(&venv_dir, &used_ns_dst)?;
+    install_package(&venv_dir, &unused_dst)?;
+
+    let slim_dir = temp.path().join("slim-venv");
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("slim")
+        .arg(&project_dir)
+        .arg(&venv_dir)
+        .arg("--output")
+        .arg(&slim_dir)
+        .output()
+        .context("failed to execute tsrs-cli slim for implicit namespace project")?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "tsrs-cli slim exited with {}. stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let site_packages = site_packages_path(&slim_dir)?;
+    assert!(site_packages.join("used_ns_implicit").join("sub").exists());
+    assert!(!package_exists(&site_packages, "unused_pkg")?);
+
+    Ok(())
+}
+
+#[test]
+fn slim_keeps_used_package_import_chain_subpkg() -> anyhow::Result<()> {
+    run_slim_case("project_import_chain_subpkg")
+}
+
+#[test]
+fn slim_keeps_used_package_from_pkg_import_subpkg() -> anyhow::Result<()> {
+    run_slim_case("project_from_pkg_import_subpkg")
+}
+
+#[test]
+fn slim_keeps_src_layout_package_and_typed_marker() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let fixture_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("test_packages/test_slim_packages");
+    let used_src_layout_src = fixture_root.join("used_src_layout");
+    let unused_src = fixture_root.join("unused_pkg");
+    let project_src = fixture_root.join("project_src_layout_import");
+
+    let used_src_layout_dst = temp.path().join("used_src_layout");
+    copy_dir_filtered(&used_src_layout_src, &used_src_layout_dst)?;
+    let unused_dst = temp.path().join("unused_pkg");
+    copy_dir_filtered(&unused_src, &unused_dst)?;
+    let project_dir = temp.path().join("project_src_layout_import");
+    copy_dir_filtered(&project_src, &project_dir)?;
+
+    let venv_dir = temp.path().join("venv");
+    create_venv(&venv_dir)?;
+    install_package(&venv_dir, &used_src_layout_dst)?;
+    install_package(&venv_dir, &unused_dst)?;
+
+    let slim_dir = temp.path().join("slim-venv");
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("slim")
+        .arg(&project_dir)
+        .arg(&venv_dir)
+        .arg("--output")
+        .arg(&slim_dir)
+        .output()
+        .context("failed to execute tsrs-cli slim for project_src_layout_import")?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "tsrs-cli slim exited with {}. stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let site_packages = site_packages_path(&slim_dir)?;
+    assert!(package_exists(&site_packages, "used_src_layout")?);
+    assert!(site_packages
+        .join("used_src_layout")
+        .join("py.typed")
+        .exists());
     assert!(!package_exists(&site_packages, "unused_pkg")?);
 
     Ok(())

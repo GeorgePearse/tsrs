@@ -117,8 +117,11 @@ impl VenvAnalyzer {
             }
 
             if path.is_dir() && !seen.contains(&name) {
-                // Check if it has __init__.py (is a package)
-                if path.join("__init__.py").exists() || name.ends_with(".dist-info") {
+                // Check if it has __init__.py or is a namespace package/dist-info
+                if path.join("__init__.py").exists()
+                    || name.ends_with(".dist-info")
+                    || directory_contains_python(&path)?
+                {
                     let version = Self::extract_version(&name);
                     packages.push(PackageInfo {
                         name: name.clone(),
@@ -168,4 +171,24 @@ impl VenvAnalyzer {
         }
         None
     }
+}
+
+fn directory_contains_python(path: &Path) -> Result<bool> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let child_path = entry.path();
+        if child_path.is_file() {
+            if child_path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("py"))
+            {
+                return Ok(true);
+            }
+        } else if child_path.is_dir() {
+            if directory_contains_python(&child_path)? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }

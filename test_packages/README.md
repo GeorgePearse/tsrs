@@ -563,6 +563,19 @@ test_slim_packages/
 │   └── extra_dep/__init__.py (transitive dependency for used_pkg_extra)
 ├── used_pkg_transitive/
 │   └── used_pkg_transitive/__init__.py (imports extra_dep within its API)
+├── used_src_layout/
+│   └── src/used_src_layout (__init__.py + py.typed for typing metadata)
+├── multi_mod/
+│   ├── alpha.py (module used by consumers)
+│   └── beta.py (module expected to be pruned)
+├── used_ns_implicit/
+│   └── used_ns_implicit/sub/helper.py (implicit namespace package)
+├── used_ns_pkg_part/
+│   └── used_ns_pkg/extra/second.py (extends used_ns_pkg namespace)
+├── dash_pkg/
+│   └── dash_pkg/__init__.py (dash-named distribution exposing greet())
+├── used_native/
+│   └── used_native/libs/libdummy.so (packaged native shared library)
 ├── unused_pkg/
 │   └── unused_pkg/__init__.py (defines wave())
 ├── project/
@@ -575,6 +588,10 @@ test_slim_packages/
 │   └── main.py (from used_pkg.subpkg.tool import get_tool_name)
 ├── project_wildcard_import/
 │   └── main.py (from used_pkg import *)
+├── project_dash_import/
+│   └── main.py (imports dash_pkg from a dashed distribution)
+├── project_reexport_get_tool/
+│   └── main.py (import re-exported attribute from used_pkg)
 ├── project_alias_function/
 │   └── main.py (from used_pkg import greet as greet_alias)
 ├── project_submodule_alias/
@@ -597,6 +614,16 @@ test_slim_packages/
 │   └── main.py (loads packaged JSON resource)
 ├── project_resource_template/
 │   └── main.py (loads packaged text template)
+├── project_resource_pkgutil/
+│   └── main.py (loads resources via pkgutil.get_data)
+├── project_resource_files/
+│   └── main.py (loads resources via importlib.resources.files)
+├── project_dynamic_import/
+│   └── main.py (invokes used_pkg via __import__ for dynamic import coverage)
+├── project_native_resource/
+│   └── main.py (verifies native shared library remains packaged)
+├── project_type_checking_import/
+│   └── main.py (imports used_pkg only under typing guards)
 ├── project_package_relative/
 │   └── app/main.py (package with relative imports)
 ├── project_single_module_import/
@@ -605,15 +632,30 @@ test_slim_packages/
 │   └── main.py (imports used_pkg_extra but not extra_dep)
 ├── project_used_transitive/
 │   └── main.py (imports used_pkg_transitive which uses extra_dep)
+├── project_src_layout_import/
+│   └── main.py (imports src-layout package used_src_layout)
+├── project_select_alpha/
+│   └── main.py (imports only alpha module from multi_mod)
 ├── project_two_used_packages/
 │   └── main.py (imports used_pkg and used_pkg2)
+├── project_namespace_multipkg/
+│   └── main.py (imports used_ns_pkg and its extra namespace distribution)
+├── project_implicit_namespace_import/
+│   └── main.py (imports from implicit namespace package)
+├── project_import_chain_subpkg/
+│   └── main.py (accesses used_pkg.subpkg.tool via chained attributes)
+├── project_from_pkg_import_subpkg/
+│   └── main.py (from used_pkg import subpkg and uses tool)
 └── project_submodule_alias_item/
     └── main.py (from used_pkg.subpkg import item as alias)
 ```
 
 **Expected behavior**:
-- Slim venv contains `used_pkg` but omits `unused_pkg` for all consumer variants
-- Demonstrates selective package copying without manual excludes (direct import, from-import, alias import, function alias, submodule import, wildcard import, submodule wildcard, multiline import, function-scope import, try/except import, conditional import, backslash continuation, multi-import statements, submodule item alias, resource access including nested templates, single-module distributions, pruning unused transitive dependencies, and retaining used transitive dependencies)
+- Slim venv contains `used_pkg` but omits `unused_pkg` for all consumer variants, except for documented limitations
+- Demonstrates selective package copying without manual excludes (direct import, from-import, alias import, function alias, submodule import, wildcard import, submodule wildcard, multiline import, function-scope import, try/except import, conditional import, backslash continuation, multi-import statements, submodule item alias, resource access including pkgutil/files APIs, nested templates, native shared libraries, src-layout packages with typing markers, single-module distributions, implicit namespace packages, pruning unused transitive dependencies, and retaining used transitive dependencies)
+- `project_dynamic_import` highlights the current limitation: dynamically imported modules via `__import__` are not detected and may be pruned
+- `project_type_checking_import` shows that TYPE_CHECKING-only imports do not keep packages in the slimmed environment
+- `dash_pkg` + `project_dash_import` confirm distributions with hyphenated names are preserved when imported
 
 **Related code**: `tests/cli_integration.rs` – `slim_keeps_used_package_and_prunes_unused`
 
@@ -626,6 +668,7 @@ test_slim_packages/
 - Contains small Python modules with locals that should be renamed
 - Exercises `tsrs-cli minify-plan`, `minify`, `apply-plan`, and `minify-plan-dir` / `apply-plan-dir`
 - Ensures nested directories, structural pattern matching, comprehensions, and class metadata are captured in plan outputs
+- Integration coverage includes glob includes/excludes and applying plans via stdin (`--plan-stdin`)
 
 **Package structure**:
 ```
@@ -649,6 +692,43 @@ test_minify/
 
 ---
 
+### 18. **test_minify_dependency**
+**Current Status**: ✅ Exists
+
+**What it tests**: Minifying a dependency package (and all of its local dependencies) does not break a downstream consumer's test suite
+- Installs a transitive dependency (`minify-core`), a dependency (`minify-dep`), and a consumer (`minify-consumer`) into an isolated uv/venv environment
+- Recursively runs `tsrs-cli minify`/`minify-dir` against the dependency tree before installation, following mappings defined in `[tool.tsrs.local-dependencies]`
+- Executes the consumer's `pytest` suite to confirm behavior is preserved after minification
+
+**Package structure**:
+```
+test_minify_dependency/
+├── core_pkg/
+│   ├── pyproject.toml (defines transitive dependency minify-core)
+│   └── minify_core/
+│       └── __init__.py (loop with locals targeted by minification)
+├── dependency_pkg/
+│   ├── pyproject.toml (minify-dep + `[tool.tsrs.local-dependencies]` mapping to ../core_pkg)
+│   └── minify_dep/
+│       └── __init__.py (delegates to minify_core and exposes consumer-facing helpers)
+└── consumer_pkg/
+    ├── pyproject.toml (depends on minify-dep)
+    ├── minify_consumer/
+    │   ├── __init__.py (exports helper functions)
+    │   └── app.py (imports minify_dep and exercises recursive behavior)
+    └── tests/
+        └── test_app.py (pytest suite validating greetings & summaries)
+```
+
+**Expected behavior**:
+- Minification rewrites local variables inside both `minify_dep` and its transitive dependency `minify_core`
+- Installing the minified packages alongside the consumer succeeds via uv/pip
+- `pytest` passes for the consumer package, demonstrating compatibility between minified dependency tree and consumer
+
+**Related code**: `tests/minify_consumer_integration.rs`
+
+---
+
 ## Running Tests
 
 ### Run a single test package:
@@ -666,6 +746,51 @@ pytest tests/
 cd test_packages
 ./run_all_tests.sh
 ```
+
+### Wheelhouse cache for third-party dependencies
+
+To avoid re-downloading heavy packages for integration tests, populate the
+local wheelhouse once and reuse it:
+
+```bash
+python scripts/bootstrap_wheelhouse.py
+```
+
+This stores wheels under `test_packages/.wheelhouse`. Tests automatically look
+for this directory (or the path specified via `TSRS_WHEELHOUSE`) and pass
+`--find-links` / `--no-index` flags when installing third-party requirements.
+If the directory is absent, the tests fall back to PyPI.
+
+### Using tsrs-minify-tree locally
+
+`tsrs-minify-tree` is a helper binary that runs `tsrs-cli minify`/`minify-dir`
+in-place for a package and any local dependencies recorded in
+`pyproject.toml` under `[tool.tsrs.local-dependencies]`. It mirrors the
+recursive traversal used by the integration tests and ensures each package is
+minified exactly once before you run a consumer test suite.
+
+pyproject snippet:
+```toml
+[tool.tsrs.local-dependencies]
+minify-core = "../core_pkg"
+```
+
+Usage:
+```bash
+# Minify the dependency tree rooted at dependency_pkg
+tsrs-minify-tree test_packages/test_minify_dependency/dependency_pkg
+
+# Omit the argument to operate on the current directory
+cd test_packages/test_minify_dependency/dependency_pkg
+tsrs-minify-tree .
+```
+
+Notes:
+- Only packages that appear in `project.dependencies` and have a matching entry
+  in `[tool.tsrs.local-dependencies]` are traversed.
+- Each discovered package is canonicalized and minified once to avoid cycles.
+- All minification happens in-place; commit or back up sources first if
+  needed.
 
 ### Test with tsrs tree-shaking:
 ```bash

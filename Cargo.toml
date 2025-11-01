@@ -24,6 +24,7 @@ num_cpus = "1"
 encoding_rs = "0.8"
 similar = "2"
 ignore = "0.4"
+toml = "0.8"
 
 [lib]
 name = "tsrs"
@@ -32,6 +33,10 @@ crate-type = ["rlib"]
 [[bin]]
 name = "tsrs-cli"
 path = "src/bin/cli.rs"
+
+[[bin]]
+name = "tsrs-minify-tree"
+path = "src/bin/tsrs-minify-tree.rs"
 
 [features]
 default = []

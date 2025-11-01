@@ -133,12 +133,10 @@ fn minify_plan_emits_expected_json() -> Result<()> {
         .find(|func| func.locals.iter().any(|name| name == "message"))
         .context("expected plan to include greet locals")?;
 
-    assert!(
-        function
-            .renames
-            .iter()
-            .any(|rename| rename.original == "message")
-    );
+    assert!(function
+        .renames
+        .iter()
+        .any(|rename| rename.original == "message"));
 
     Ok(())
 }
@@ -212,8 +210,7 @@ fn minify_plan_dir_outputs_bundle_with_expected_files() -> Result<()> {
 
     for file in &bundle.files {
         assert!(
-            file
-                .plan
+            file.plan
                 .functions
                 .iter()
                 .any(|func| !func.renames.is_empty()),
@@ -342,7 +339,10 @@ fn minify_plan_dir_hidden_files_behavior() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let bundle: PlanBundle = serde_json::from_slice(&fs::read(&plan_path)?)?;
-    assert!(!bundle.files.iter().any(|file| file.path.contains(".hidden_module")));
+    assert!(!bundle
+        .files
+        .iter()
+        .any(|file| file.path.contains(".hidden_module")));
 
     let hidden_plan_path = temp.path().join("plan-hidden.json");
     let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
@@ -375,7 +375,10 @@ fn minify_plan_dir_respects_gitignore() -> Result<()> {
     let dst_dir = temp.path().join("src");
     copy_dir_filtered(&src_dir, &dst_dir)?;
     let ignored_path = dst_dir.join("ignored_module.py");
-    touch_file(&ignored_path, "def ignored():\n    value = 2\n    return value\n")?;
+    touch_file(
+        &ignored_path,
+        "def ignored():\n    value = 2\n    return value\n",
+    )?;
     touch_file(&dst_dir.join(".gitignore"), "ignored_module.py\n")?;
 
     let plan_path = temp.path().join("plan.json");
@@ -418,6 +421,129 @@ fn minify_plan_dir_respects_gitignore() -> Result<()> {
         .files
         .iter()
         .any(|file| file.path == "ignored_module.py"));
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn minify_plan_dir_follows_symlinks_when_enabled() -> Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let temp = TempDir::new()?;
+    let src_dir = fixture_path("src");
+    let dst_dir = temp.path().join("src");
+    copy_dir_filtered(&src_dir, &dst_dir)?;
+
+    let target = dst_dir.join("simple_module.py");
+    let link_path = dst_dir.join("linked_simple.py");
+    symlink(&target, &link_path)?;
+
+    let default_plan = temp.path().join("plan-default.json");
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("minify-plan-dir")
+        .arg(&dst_dir)
+        .arg("--out")
+        .arg(&default_plan)
+        .output()
+        .context("failed to execute minify-plan-dir without follow-symlinks")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "minify-plan-dir exited with {}. stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let default_bundle: PlanBundle = serde_json::from_slice(&fs::read(&default_plan)?)?;
+    assert!(
+        !default_bundle
+            .files
+            .iter()
+            .any(|file| file.path == "linked_simple.py"),
+        "symlink should not be included without --follow-symlinks"
+    );
+
+    let follow_plan = temp.path().join("plan-follow.json");
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("minify-plan-dir")
+        .arg(&dst_dir)
+        .arg("--out")
+        .arg(&follow_plan)
+        .arg("--follow-symlinks")
+        .output()
+        .context("failed to execute minify-plan-dir with follow-symlinks")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "minify-plan-dir --follow-symlinks exited with {}. stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let follow_bundle: PlanBundle = serde_json::from_slice(&fs::read(&follow_plan)?)?;
+    assert!(
+        follow_bundle
+            .files
+            .iter()
+            .any(|file| file.path == "linked_simple.py"),
+        "symlink should be included when --follow-symlinks is set"
+    );
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+#[test]
+fn minify_plan_dir_follows_symlinks_when_enabled() -> Result<()> {
+    Ok(())
+}
+
+#[test]
+fn minify_plan_dir_max_depth_limits() -> Result<()> {
+    let temp = TempDir::new()?;
+    let src_dir = fixture_path("src");
+    let dst_dir = temp.path().join("src");
+    copy_dir_filtered(&src_dir, &dst_dir)?;
+    materialize_pattern_fixture(&dst_dir)?;
+
+    let baseline_path = temp.path().join("plan-baseline.json");
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("minify-plan-dir")
+        .arg(&dst_dir)
+        .arg("--out")
+        .arg(&baseline_path)
+        .output()
+        .context("failed to execute baseline minify-plan-dir")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "minify-plan-dir exited with {}. stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let baseline_bundle: PlanBundle = serde_json::from_slice(&fs::read(&baseline_path)?)?;
+    assert!(baseline_bundle
+        .files
+        .iter()
+        .any(|file| file.path == "nested/calculator.py"));
+
+    let depth_path = temp.path().join("plan-depth.json");
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("minify-plan-dir")
+        .arg(&dst_dir)
+        .arg("--out")
+        .arg(&depth_path)
+        .arg("--max-depth")
+        .arg("1")
+        .output()
+        .context("failed to execute minify-plan-dir with max-depth")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "minify-plan-dir --max-depth exited with {}. stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let depth_bundle: PlanBundle = serde_json::from_slice(&fs::read(&depth_path)?)?;
+    assert!(depth_bundle
+        .files
+        .iter()
+        .all(|file| !file.path.contains('/')));
 
     Ok(())
 }
@@ -478,6 +604,156 @@ fn minify_stdout_emits_rewritten_code_without_touching_file() -> Result<()> {
 
     let after = fs::read_to_string(&dst)?;
     assert_eq!(after, original, "source file should remain unchanged");
+
+    Ok(())
+}
+
+#[test]
+fn minify_diff_shows_unified_output_without_modifying_file() -> Result<()> {
+    let temp = TempDir::new()?;
+    let src = fixture_path("src/simple_module.py");
+    let dst = temp.path().join("simple_module.py");
+    fs::copy(&src, &dst)?;
+    let baseline = fs::read_to_string(&dst)?;
+
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("minify")
+        .arg(&dst)
+        .arg("--diff")
+        .output()
+        .context("failed to execute tsrs-cli minify --diff")?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "minify --diff exited with {}. stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("---"), "expected diff header");
+    assert!(stdout.contains("+++"), "expected diff header");
+    assert!(stdout.contains("@@"), "expected hunk markers");
+
+    let after = fs::read_to_string(&dst)?;
+    assert_eq!(after, baseline, "--diff should not modify the file");
+
+    Ok(())
+}
+
+#[test]
+fn minify_json_requires_stats() -> Result<()> {
+    let temp = TempDir::new()?;
+    let src = fixture_path("src/simple_module.py");
+    let dst = temp.path().join("simple_module.py");
+    fs::copy(&src, &dst)?;
+    let original = fs::read_to_string(&dst)?;
+
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("minify")
+        .arg(&dst)
+        .arg("--json")
+        .output()
+        .context("failed to execute tsrs-cli minify --json")?;
+
+    assert!(
+        !output.status.success(),
+        "minify --json should fail without --stats"
+    );
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("--json requires --stats"));
+
+    let after = fs::read_to_string(&dst)?;
+    assert_eq!(after, original);
+
+    Ok(())
+}
+
+#[test]
+fn minify_backup_ext_requires_in_place() -> Result<()> {
+    let temp = TempDir::new()?;
+    let src = fixture_path("src/simple_module.py");
+    let dst = temp.path().join("simple_module.py");
+    fs::copy(&src, &dst)?;
+    let original = fs::read_to_string(&dst)?;
+
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("minify")
+        .arg(&dst)
+        .arg("--backup-ext")
+        .arg(".bak")
+        .output()
+        .context("failed to execute tsrs-cli minify --backup-ext")?;
+
+    assert!(
+        !output.status.success(),
+        "minify --backup-ext should fail without --in-place"
+    );
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("--backup-ext requires --in-place"));
+
+    let after = fs::read_to_string(&dst)?;
+    assert_eq!(after, original);
+
+    Ok(())
+}
+
+#[test]
+fn minify_plan_dir_respects_include_exclude_globs() -> Result<()> {
+    let temp = TempDir::new()?;
+    let src_dir = fixture_path("src");
+    let dst_dir = temp.path().join("src");
+    copy_dir_filtered(&src_dir, &dst_dir)?;
+    materialize_pattern_fixture(&dst_dir)?;
+
+    let include_path = temp.path().join("plan-include.json");
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("minify-plan-dir")
+        .arg(&dst_dir)
+        .arg("--out")
+        .arg(&include_path)
+        .arg("--include")
+        .arg("nested/*.py")
+        .output()
+        .context("failed to execute minify-plan-dir with include glob")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "minify-plan-dir exited with {}. stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let include_bundle: PlanBundle = serde_json::from_slice(&fs::read(&include_path)?)?;
+    let included_paths: HashSet<&str> = include_bundle
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    assert_eq!(included_paths, HashSet::from(["nested/calculator.py"]));
+
+    let exclude_path = temp.path().join("plan-exclude.json");
+    let output = assert_cmd::cargo::cargo_bin_cmd!("tsrs-cli")
+        .arg("minify-plan-dir")
+        .arg(&dst_dir)
+        .arg("--out")
+        .arg(&exclude_path)
+        .arg("--exclude")
+        .arg("nested/*.py")
+        .output()
+        .context("failed to execute minify-plan-dir with exclude glob")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "minify-plan-dir exited with {}. stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let exclude_bundle: PlanBundle = serde_json::from_slice(&fs::read(&exclude_path)?)?;
+    let excluded_paths: HashSet<&str> = exclude_bundle
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
+    assert!(excluded_paths.contains("simple_module.py"));
+    assert!(!excluded_paths.contains("nested/calculator.py"));
 
     Ok(())
 }

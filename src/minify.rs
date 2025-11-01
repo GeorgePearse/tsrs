@@ -1449,7 +1449,11 @@ fn strip_docstrings(module_name: &str, source: &str) -> Result<String> {
     Ok(stripped)
 }
 
-fn collect_docstrings_in_suite(source: &str, suite: &[ast::Stmt], ranges: &mut Vec<(usize, usize)>) {
+fn collect_docstrings_in_suite(
+    source: &str,
+    suite: &[ast::Stmt],
+    ranges: &mut Vec<(usize, usize)>,
+) {
     if let Some(first) = suite.first() {
         if is_docstring_stmt(first) {
             ranges.push(docstring_range(source, first));
@@ -1462,7 +1466,9 @@ fn collect_docstrings_in_suite(source: &str, suite: &[ast::Stmt], ranges: &mut V
             ast::Stmt::AsyncFunctionDef(func) => {
                 collect_docstrings_in_suite(source, &func.body, ranges)
             }
-            ast::Stmt::ClassDef(class_def) => collect_docstrings_in_suite(source, &class_def.body, ranges),
+            ast::Stmt::ClassDef(class_def) => {
+                collect_docstrings_in_suite(source, &class_def.body, ranges)
+            }
             _ => {}
         }
     }
