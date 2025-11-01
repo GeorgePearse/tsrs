@@ -26,7 +26,7 @@ use rayon::ThreadPoolBuilder;
 use serde::{Deserialize, Serialize};
 use similar::TextDiff;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
@@ -558,12 +558,15 @@ fn main() -> anyhow::Result<()> {
                 std::io::stdin().read_to_end(&mut buffer)?;
                 let (source, metadata) = decode_python_bytes(&buffer, "stdin")?;
 
-                // Detect dead code if requested
+                // Generate minification plan
+                let mut plan = Minifier::plan_from_source("stdin", &source)?;
+
+                // Filter plan if --remove-dead-code is requested
                 if remove_dead_code {
-                    detect_dead_code(&source, "stdin", cli.quiet)?;
+                    let dead_code = detect_dead_code(&source, "stdin", cli.quiet)?;
+                    plan = filter_plan_for_dead_code(plan, &dead_code);
                 }
 
-                let plan = Minifier::plan_from_source("stdin", &source)?;
                 let fake_path = PathBuf::from("stdin");
                 let (stats, bytes) = apply_plan_to_file(
                     &fake_path,
@@ -586,19 +589,28 @@ fn main() -> anyhow::Result<()> {
                 )?;
                 (stats, bytes)
             } else {
-                // Detect dead code if requested
+                // Read source code
+                let (source, metadata) = read_python(&python_file)?;
+                let module_name = python_file
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| python_file.to_string_lossy().to_string());
+
+                // Generate minification plan
+                let mut plan = Minifier::plan_from_source(&module_name, &source)?;
+
+                // Filter plan if --remove-dead-code is requested
                 if remove_dead_code {
-                    let (source, _) = read_python(&python_file)?;
-                    let module_name = python_file
-                        .file_stem()
-                        .and_then(|stem| stem.to_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| python_file.to_string_lossy().to_string());
-                    detect_dead_code(&source, &module_name, cli.quiet)?;
+                    let dead_code = detect_dead_code(&source, &module_name, cli.quiet)?;
+                    plan = filter_plan_for_dead_code(plan, &dead_code);
                 }
 
-                let (stats, bytes) = minify(
+                let (stats, bytes) = apply_plan_to_file(
                     &python_file,
+                    &source,
+                    &metadata,
+                    &plan,
                     in_place,
                     dry_run,
                     backup_ext.as_deref(),
@@ -811,7 +823,7 @@ fn main() -> anyhow::Result<()> {
             glob_case_insensitive,
             max_depth,
             respect_gitignore,
-            remove_dead_code: _,  // TODO: Implement in Phase 4b
+            remove_dead_code,
         } => {
             let stats_result = minify_dir_with_depth(
                 &input_dir,
@@ -838,6 +850,7 @@ fn main() -> anyhow::Result<()> {
                 diff_context,
                 respect_gitignore,
                 max_depth,
+                remove_dead_code,
             )?;
 
             if fail_on_bailout || fail_on_error || fail_on_change {
@@ -1004,6 +1017,29 @@ fn detect_dead_code(source: &str, package_name: &str, quiet: bool) -> anyhow::Re
         .collect();
 
     Ok(result)
+}
+
+/// Filter a MinifyPlan to exclude dead code functions
+fn filter_plan_for_dead_code(mut plan: MinifyPlan, dead_code: &[(usize, String)]) -> MinifyPlan {
+    // Create set of dead function names for fast lookup
+    let dead_names: HashSet<&str> = dead_code
+        .iter()
+        .map(|(_, name)| name.as_str())
+        .collect();
+
+    // Filter functions: remove those that are dead code
+    plan.functions.retain(|func| {
+        // Extract simple name from qualified_name (last component after .)
+        let simple_name = func.qualified_name
+            .split('.')
+            .last()
+            .unwrap_or(&func.qualified_name);
+
+        // Keep function if it's not in the dead code list
+        !dead_names.contains(simple_name)
+    });
+
+    plan
 }
 
 fn minify(
@@ -1564,6 +1600,42 @@ fn minify_file(
     diff_context: usize,
     force_stdout: bool,
 ) -> anyhow::Result<(DirStats, Option<Vec<u8>>)> {
+    minify_file_impl(
+        file_path,
+        in_place,
+        dry_run,
+        backup_ext,
+        show_stats,
+        json_output,
+        quiet,
+        output_json,
+        fail_on_bailout,
+        fail_on_error,
+        fail_on_change,
+        diff,
+        diff_context,
+        force_stdout,
+        false,  // remove_dead_code defaults to false
+    )
+}
+
+fn minify_file_impl(
+    file_path: &PathBuf,
+    in_place: bool,
+    dry_run: bool,
+    backup_ext: Option<&str>,
+    show_stats: bool,
+    json_output: bool,
+    quiet: bool,
+    output_json: Option<&Path>,
+    fail_on_bailout: bool,
+    fail_on_error: bool,
+    fail_on_change: bool,
+    diff: bool,
+    diff_context: usize,
+    force_stdout: bool,
+    remove_dead_code: bool,
+) -> anyhow::Result<(DirStats, Option<Vec<u8>>)> {
     if json_output && !show_stats {
         anyhow::bail!("--json requires --stats");
     }
@@ -1575,7 +1647,14 @@ fn minify_file(
         .map(|s| s.to_string())
         .unwrap_or_else(|| file_path.to_string_lossy().to_string());
 
-    let plan = Minifier::plan_from_source(&module_name, &source)?;
+    let mut plan = Minifier::plan_from_source(&module_name, &source)?;
+
+    // Filter plan if --remove-dead-code is requested
+    if remove_dead_code {
+        let dead_code = detect_dead_code(&source, &module_name, quiet)?;
+        plan = filter_plan_for_dead_code(plan, &dead_code);
+    }
+
     apply_plan_to_file(
         file_path,
         &source,
@@ -2387,6 +2466,7 @@ fn minify_dir(
     fail_on_change: bool,
     diff: bool,
     diff_context: usize,
+    remove_dead_code: bool,
 ) -> anyhow::Result<DirStats> {
     minify_dir_with_depth(
         input_dir,
@@ -2413,6 +2493,7 @@ fn minify_dir(
         diff_context,
         false,
         None,
+        remove_dead_code,
     )
 }
 
@@ -2441,6 +2522,7 @@ fn minify_dir_with_depth(
     diff_context: usize,
     respect_gitignore: bool,
     max_depth: Option<usize>,
+    remove_dead_code: bool,
 ) -> anyhow::Result<DirStats> {
     let input_dir = canonicalize_directory(input_dir.as_path())?;
     if !input_dir.is_dir() {
@@ -2605,7 +2687,7 @@ fn minify_dir_with_depth(
         };
 
         let module_name = derive_module_name(&candidate.rel_path);
-        let plan = match Minifier::plan_from_source(&module_name, &source) {
+        let mut plan = match Minifier::plan_from_source(&module_name, &source) {
             Ok(plan) => plan,
             Err(err) => {
                 return FileResult {
@@ -2616,6 +2698,18 @@ fn minify_dir_with_depth(
                 }
             }
         };
+
+        // Filter plan if --remove-dead-code is requested
+        if remove_dead_code {
+            let dead_code = match detect_dead_code(&source, &module_name, quiet) {
+                Ok(dead_code) => dead_code,
+                Err(_err) => {
+                    // If dead code detection fails, just continue with unfiltered plan
+                    Vec::new()
+                }
+            };
+            plan = filter_plan_for_dead_code(plan, &dead_code);
+        }
 
         let rename_total: usize = plan.functions.iter().map(|f| f.renames.len()).sum();
         let has_nested = plan.functions.iter().any(|f| f.has_nested_functions);
@@ -3301,6 +3395,7 @@ mod tests {
             cfg.diff_context,
             cfg.respect_gitignore,
             cfg.max_depth,
+            false,
         )
     }
 
