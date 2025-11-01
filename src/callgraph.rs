@@ -264,6 +264,11 @@ impl CallGraphAnalyzer {
         // Third pass: build call edges
         self.extract_calls_suite(package, &suite)?;
 
+        // Fourth pass: mark imported functions as entry points (Phase 2)
+        // This ensures that functions imported from other packages are treated as
+        // potentially reachable from external callers
+        self.mark_imported_functions_as_entry_points();
+
         // Also maintain legacy PackageCallGraph for backward compatibility
         self.build_legacy_graph(package);
 
@@ -676,19 +681,24 @@ impl CallGraphAnalyzer {
             ast::Expr::Call(call) => {
                 if let ast::Expr::Name(name_expr) = call.func.as_ref() {
                     let func_name = name_expr.id.as_str();
-                    // Look up the callee in this package
-                    if let Some(callee_id) = self
-                        .function_index
-                        .get(&(package.to_string(), func_name.to_string()))
-                        .copied()
+                    // Resolve the call using imports (Phase 2: Inter-package call edges)
+                    if let Some((resolved_pkg, resolved_func)) =
+                        self.resolve_call(package, func_name)
                     {
-                        if let Some(caller_id) = current_func {
-                            let location = SourceLocation { line: 0, col: 0 };
-                            self.edges.push(CallEdge {
-                                caller: caller_id,
-                                callee: callee_id,
-                                location,
-                            });
+                        // Look up the callee using resolved package and function name
+                        if let Some(callee_id) = self
+                            .function_index
+                            .get(&(resolved_pkg, resolved_func))
+                            .copied()
+                        {
+                            if let Some(caller_id) = current_func {
+                                let location = SourceLocation { line: 0, col: 0 };
+                                self.edges.push(CallEdge {
+                                    caller: caller_id,
+                                    callee: callee_id,
+                                    location,
+                                });
+                            }
                         }
                     }
                 }
@@ -925,7 +935,7 @@ impl CallGraphAnalyzer {
     /// 1. Check if call_name is a local function in package
     /// 2. Check if it's an imported function
     /// 3. Return None
-    fn resolve_call(&self, package: &str, call_name: &str) -> Option<(String, String)> {
+    pub fn resolve_call(&self, package: &str, call_name: &str) -> Option<(String, String)> {
         // First check if it's a local function in this package
         if self
             .function_index
@@ -964,6 +974,30 @@ impl CallGraphAnalyzer {
         }
 
         result
+    }
+
+    /// Mark imported functions as entry points
+    /// This ensures imported functions are considered reachable from external callers
+    /// Part of Phase 2: Inter-package call edges
+    fn mark_imported_functions_as_entry_points(&mut self) {
+        // Collect all unique (source_package, source_function) pairs
+        let mut imported_funcs: Vec<(String, String)> = self
+            .imports
+            .values()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        // Sort for deterministic behavior
+        imported_funcs.sort();
+
+        // Mark each imported function as an entry point if it exists
+        for (source_pkg, source_func) in imported_funcs {
+            if let Some(func_id) = self.function_index.get(&(source_pkg, source_func)).copied() {
+                self.entry_points.insert(func_id);
+            }
+        }
     }
 }
 
@@ -1566,5 +1600,61 @@ def helper():
         // Check no imports in pkg_b
         let imports_b = analyzer.get_imports_for_package("pkg_b");
         assert_eq!(imports_b.len(), 0, "pkg_b should have no imports");
+    }
+
+    #[test]
+    fn test_cross_package_call_detection() {
+        let pkg_a = r#"
+from pkg_b import helper
+
+def main():
+    helper()
+
+if __name__ == "__main__":
+    main()
+"#;
+
+        let pkg_b = r#"
+def helper():
+    pass
+"#;
+
+        let mut analyzer = CallGraphAnalyzer::new();
+        // Analyze pkg_b first so its functions are registered before we analyze pkg_a's calls
+        analyzer.analyze_source("pkg_b", pkg_b).unwrap();
+        analyzer.analyze_source("pkg_a", pkg_a).unwrap();
+
+        let nodes = analyzer.get_nodes();
+        let edges = analyzer.get_edges();
+
+        // Find function IDs
+        let main_id = nodes
+            .values()
+            .find(|n| n.name == "main" && n.package == "pkg_a")
+            .map(|n| n.id);
+        let helper_id = nodes
+            .values()
+            .find(|n| n.name == "helper" && n.package == "pkg_b")
+            .map(|n| n.id);
+
+        assert!(main_id.is_some(), "Should have main function in pkg_a");
+        assert!(helper_id.is_some(), "Should have helper function in pkg_b");
+
+        // Check that there's a cross-package call edge from main to helper
+        let cross_pkg_edge = edges
+            .iter()
+            .any(|e| e.caller == main_id.unwrap() && e.callee == helper_id.unwrap());
+
+        assert!(
+            cross_pkg_edge,
+            "Should detect cross-package call from main to helper"
+        );
+
+        // Check reachability: helper should be reachable (it's imported)
+        let reachable = analyzer.compute_reachable();
+        assert!(
+            reachable.contains(&helper_id.unwrap()),
+            "Imported helper should be reachable (marked as entry point)"
+        );
     }
 }
