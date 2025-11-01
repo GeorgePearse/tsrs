@@ -38,11 +38,26 @@ Tree-shaking is the process of analyzing code to identify and remove unused expo
 # Apply in place with a backup and stats
 ./target/debug/tsrs-cli apply-plan path/to/module.py --plan plan.json --in-place --backup-ext .bak --stats --json
 
+# Feed plan JSON from stdin
+./target/debug/tsrs-cli apply-plan path/to/module.py --plan - < plan.json
+
+# Dry run an in-place apply without modifying the file
+./target/debug/tsrs-cli apply-plan path/to/module.py --plan plan.json --in-place --dry-run
+
 # Preview the planned changes without touching the file
 ./target/debug/tsrs-cli apply-plan path/to/module.py --plan plan.json --diff
 
 # Persist plan application stats for later inspection
 ./target/debug/tsrs-cli apply-plan path/to/module.py --plan plan.json --stats --output-json reports/apply-plan.json
+
+# Pipe source through stdin and capture rewritten output
+cat path/to/module.py \\ 
+  | ./target/debug/tsrs-cli apply-plan path/to/module.py --plan plan.json --stdin --stdout \\ 
+  > path/to/module.min.py
+
+# Pipe source followed by plan JSON through stdin (source first, plan second)
+{ cat path/to/module.py; cat plan.json; } \\ 
+  | ./target/debug/tsrs-cli apply-plan stdin.py --stdin --plan-stdin
 ```
 
 ### Safe Local Rename Rewrite
@@ -54,6 +69,9 @@ Tree-shaking is the process of analyzing code to identify and remove unused expo
 # Rewrite in place (updates the file on disk)
 ./target/debug/tsrs-cli minify path/to/module.py --in-place
 
+# Preview the in-place rewrite without touching the file
+./target/debug/tsrs-cli minify path/to/module.py --in-place --dry-run
+
 # Keep a .bak backup before rewriting in place
 ./target/debug/tsrs-cli minify path/to/module.py --in-place --backup-ext .bak
 
@@ -63,9 +81,18 @@ Tree-shaking is the process of analyzing code to identify and remove unused expo
 
 # Preview a unified diff alongside rewritten output
 ./target/debug/tsrs-cli minify path/to/module.py --diff
+# Adjust diff context lines (default: 3)
+./target/debug/tsrs-cli minify path/to/module.py --diff --diff-context 5
 # Persist stats to disk for later analysis
 ./target/debug/tsrs-cli minify path/to/module.py --stats --output-json reports/minify.json
+
+# Stream via stdin/stdout for editor integrations
+cat path/to/module.py \\
+  | ./target/debug/tsrs-cli minify path/to/module.py --stdin --stdout \\
+  > path/to/module.min.py
 ```
+
+Docstrings at the module, class, and function level are stripped automatically during these rewrites so the rewritten files shed non-executable documentation without changing runtime behaviour. Ordinary string literals inside executable code remain intact.
 
 ### Directory Rewrite
 
@@ -76,10 +103,16 @@ Tree-shaking is the process of analyzing code to identify and remove unused expo
 # Write into a custom output directory
 ./target/debug/tsrs-cli minify-dir ./src --out-dir ./dist/min
 
+> The output path must reside outside the input tree after resolving `..` segments
+> and symlinks; otherwise the command aborts to avoid clobbering sources.
+
 # Only minify application code, skip tests
 ./target/debug/tsrs-cli minify-dir ./project \
   --include "project/**" \
   --exclude "project/tests/**"
+
+# Load include/exclude globs from files
+./target/debug/tsrs-cli minify-dir ./src --include-file includes.txt --exclude-file excludes.txt
 
 # Preview changes without writing files
 ./target/debug/tsrs-cli minify-dir ./src --dry-run
@@ -90,27 +123,71 @@ Tree-shaking is the process of analyzing code to identify and remove unused expo
 # Rewrite in place and keep .bak backups of originals
 ./target/debug/tsrs-cli minify-dir ./src --in-place --backup-ext .bak
 
+# Customize diff context for previews (default: 3)
+./target/debug/tsrs-cli minify-dir ./src --diff --diff-context 1 --dry-run
+
+# Limit traversal depth (root depth = 1)
+./target/debug/tsrs-cli minify-dir ./src --max-depth 2 --dry-run
+
 # Limit the worker pool (defaults to CPU count)
 ./target/debug/tsrs-cli minify-dir ./src --jobs 4
+
+# Process hidden files and directories as well
+./target/debug/tsrs-cli minify-dir ./src --include-hidden
+
+# Layer repository ignore rules on top of custom globs
+./target/debug/tsrs-cli minify-dir ./src --respect-gitignore --exclude "scripts/**"
+
+# Traverse symlinked directories too
+./target/debug/tsrs-cli minify-dir ./src --follow-symlinks
+
+# Force case-insensitive glob matching on non-Windows hosts
+./target/debug/tsrs-cli minify-dir ./src --glob-case-insensitive
 
 # Show diffs for every rewritten file
 ./target/debug/tsrs-cli minify-dir ./src --diff
 
 # Write stats to a JSON file for dashboards
 ./target/debug/tsrs-cli minify-dir ./src --stats --output-json reports/minify-dir.json
+
+# Plan a directory but ignore deeply nested modules
+./target/debug/tsrs-cli minify-plan-dir ./src --max-depth 2 --jobs 4 > plans.json
+
+> When `--respect-gitignore` is set, `.gitignore`, global git excludes, and `.ignore`
+> files run first; explicit `--include`/`--exclude` (or pattern files) are then applied
+> on top, so excludes still win over includes.
 ```
 
 Each run prints per-file status lines (minified, skipped, bailouts) and summarises the total work. Bailouts copy the original file verbatim so you never lose working code—re-run with `--debug` to inspect why a file could not be safely renamed.
 
 Add `--stats` to include per-file rename counts in the output, and combine it with `--json` for a machine-readable summary of the same data.
 
-All directory commands accept `--jobs <N>` to control the number of Rayon worker threads. When omitted the tool uses the machine's CPU count. They also ignore `.git`, `__pycache__`, and `.venv` directories by default.
+Pass `--quiet` when you only want the final summary/JSON; it suppresses per-file status lines, diff output, and non-in-place rewritten content (unless you opt into `--stdout`).
+
+Use `--dry-run` to preview the work (including stats and diffs) without writing any files—available for both single-file and directory commands.
+
+For CI flows, combine `--fail-on-change`, `--fail-on-bailout`, or `--fail-on-error` with dry runs to turn safe previews into enforcement checks.
+
+All directory commands accept `--jobs <N>` to control the number of Rayon worker threads. When omitted the tool uses the machine's CPU count. They also ignore `.git`, `__pycache__`, and `.venv` directories by default—add `--follow-symlinks` if you need to traverse symlinked trees, and `--glob-case-insensitive` if you want case-insensitive glob matching on platforms where the default is case-sensitive (Windows already matches case-insensitively).
+Pattern files (`--include-file`, `--exclude-file`) accept newline-delimited globs; blank lines and `#` comments are ignored.
+
+Key directory flags at a glance:
+
+- `--diff` / `--diff-context <N>` preview unified diffs with adjustable context (default 3 lines).
+- `--max-depth <N>` limits recursion depth (the root input directory counts as depth 1).
+- `--include-hidden` enables processing of dot-prefixed files and directories.
+- Exclude globs always take precedence over include globs.
+- `--follow-symlinks` traverses symlinked directories.
+- `--glob-case-insensitive` forces case-insensitive glob matching on every platform.
 
 ### Plan Bundles
 
 ```bash
 # Create a directory-wide plan bundle
 ./target/debug/tsrs-cli minify-plan-dir ./src --out plan.json
+
+# Include hidden files while planning
+./target/debug/tsrs-cli minify-plan-dir ./src --out plan.json --include-hidden
 
 # Apply the bundle to a mirrored output tree
 ./target/debug/tsrs-cli apply-plan-dir ./src --plan plan.json --out-dir ./src-min
@@ -121,6 +198,9 @@ All directory commands accept `--jobs <N>` to control the number of Rayon worker
 # Include unified diffs while applying a plan bundle
 ./target/debug/tsrs-cli apply-plan-dir ./src --plan plan.json --diff
 
+# Apply to hidden files too
+./target/debug/tsrs-cli apply-plan-dir ./src --plan plan.json --include-hidden
+
 # Capture directory stats to a JSON report while applying a bundle
 ./target/debug/tsrs-cli apply-plan-dir ./src --plan plan.json --stats --output-json reports/apply-plan-dir.json
 
@@ -128,6 +208,19 @@ All directory commands accept `--jobs <N>` to control the number of Rayon worker
 ./target/debug/tsrs-cli minify-dir ./src --dry-run --fail-on-change --fail-on-bailout
 
 Plan bundles include a `version` field (currently `1`) so future releases can evolve the schema without breaking old plans; tools should validate this field when consuming stored bundles, and the CLI refuses to apply plans whose version exceeds the supported value.
+```
+
+### Integration Tests
+
+```bash
+# Run CLI slimming scenarios (used vs unused packages)
+cargo test --test cli_integration
+
+# Run minify/minify-plan integration coverage
+cargo test --test minify_integration
+
+# Run apply-plan / apply-plan-dir integration coverage
+cargo test --test apply_integration
 ```
 
 ## References

@@ -354,6 +354,19 @@ fn visit_stmts_for_functions<'a>(
 5. **Match patterns**: Variable bindings in match cases (include)
 6. **Type parameters** (3.12+): Generic type vars (include if present)
 
+## Docstring Handling
+
+- After applying rename plans, the minifier re-parses the module and strips docstrings
+  from modules, classes, synchronous functions, and async functions whenever the
+  docstring is the first statement in the scope.
+- Docstring detection uses `rustpython-parser` ranges so the exact slice (including
+  leading indentation and trailing newline) is removed without disturbing the rest of
+  the file layout.
+- Decorated functions and nested scopes are supported because detection operates on
+  the AST rather than string heuristics.
+- Normal string literals inside executable code paths are untouched to preserve
+  runtime behaviour—only documentation literals in docstring position are removed.
+
 ## Notes
 
 - This design focuses on **planning** only - no AST rewriting
