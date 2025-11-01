@@ -318,3 +318,442 @@ def function_b():
     assert_eq!(pkg, "package_a", "Should resolve to package_a");
     assert_eq!(func, "function_a", "Should resolve to function_a");
 }
+
+#[test]
+fn test_deep_call_chains_across_packages() {
+    // Scenario: Deep call chains: A → B → C → D
+    // Tests that reachability is correctly computed through multiple packages
+
+    let mut analyzer = CallGraphAnalyzer::new();
+
+    let package_d_code = r#"
+def base_operation():
+    """Base operation"""
+    return "result"
+
+def unused_in_d():
+    """Never called"""
+    return "dead"
+"#;
+
+    let package_c_code = r#"
+from d import base_operation
+
+def transform(data):
+    """Transform data"""
+    return base_operation()
+
+def unused_in_c():
+    """Never called"""
+    return "dead"
+"#;
+
+    let package_b_code = r#"
+from c import transform
+
+def process(data):
+    """Process data"""
+    return transform(data)
+
+def unused_in_b():
+    """Never called"""
+    return "dead"
+"#;
+
+    let package_a_code = r#"
+from b import process
+
+def test_main():
+    """Entry point"""
+    return process("input")
+"#;
+
+    analyzer.analyze_source("d", package_d_code).expect("Failed to analyze d");
+    analyzer.analyze_source("c", package_c_code).expect("Failed to analyze c");
+    analyzer.analyze_source("b", package_b_code).expect("Failed to analyze b");
+    analyzer.analyze_source("a", package_a_code).expect("Failed to analyze a");
+
+    // Register imports
+    analyzer.add_import("c".to_string(), "base_operation".to_string(),
+                       "d".to_string(), "base_operation".to_string());
+    analyzer.add_import("b".to_string(), "transform".to_string(),
+                       "c".to_string(), "transform".to_string());
+    analyzer.add_import("a".to_string(), "process".to_string(),
+                       "b".to_string(), "process".to_string());
+
+    let dead_code = analyzer.find_dead_code();
+    let dead_names: Vec<String> = dead_code.iter().map(|(_, name)| name.clone()).collect();
+
+    // Verify dead code detection
+    assert!(dead_names.contains(&"unused_in_d".to_string()), "unused_in_d should be dead");
+    assert!(dead_names.contains(&"unused_in_c".to_string()), "unused_in_c should be dead");
+    assert!(dead_names.contains(&"unused_in_b".to_string()), "unused_in_b should be dead");
+
+    // Verify live functions through call chain
+    assert!(!dead_names.contains(&"test_main".to_string()), "test_main should be live (entry point)");
+    assert!(!dead_names.contains(&"process".to_string()), "process should be live (called from test_main)");
+    assert!(!dead_names.contains(&"transform".to_string()), "transform should be live (called from process)");
+    assert!(!dead_names.contains(&"base_operation".to_string()), "base_operation should be live (called from transform)");
+}
+
+#[test]
+fn test_multiple_imports_with_aliases() {
+    // Scenario: Multiple imports from same module with different aliases
+
+    let mut analyzer = CallGraphAnalyzer::new();
+
+    let utils_code = r#"
+def util_alpha():
+    """Utility function A"""
+    return "alpha"
+
+def util_beta():
+    """Utility function B"""
+    return "beta"
+
+def util_gamma():
+    """Utility function C"""
+    return "gamma"
+
+def unused_util():
+    """Never used"""
+    return "dead"
+"#;
+
+    let app_code = r#"
+from utils import util_alpha as alpha, util_beta as beta, util_gamma
+
+def test_mixed():
+    """Test function"""
+    return alpha() + beta()
+
+def test_gamma_unused():
+    """Imported but not used"""
+    pass
+"#;
+
+    analyzer.analyze_source("utils", utils_code).expect("Failed to analyze utils");
+    analyzer.analyze_source("app", app_code).expect("Failed to analyze app");
+
+    // Register imports with different aliases
+    analyzer.add_import("app".to_string(), "alpha".to_string(),
+                       "utils".to_string(), "util_alpha".to_string());
+    analyzer.add_import("app".to_string(), "beta".to_string(),
+                       "utils".to_string(), "util_beta".to_string());
+    analyzer.add_import("app".to_string(), "util_gamma".to_string(),
+                       "utils".to_string(), "util_gamma".to_string());
+
+    let imports = analyzer.get_imports_for_package("app");
+    assert_eq!(imports.len(), 3, "app should have 3 imports");
+
+    let dead_code = analyzer.find_dead_code();
+    let dead_names: Vec<String> = dead_code.iter().map(|(_, name)| name.clone()).collect();
+
+    // util_alpha and util_beta used through aliases in test_mixed
+    assert!(!dead_names.contains(&"util_alpha".to_string()), "util_alpha should be live (called from test_mixed)");
+    assert!(!dead_names.contains(&"util_beta".to_string()), "util_beta should be live (called from test_mixed)");
+
+    // test_mixed is an entry point, test_gamma_unused is also an entry point but does nothing
+    assert!(!dead_names.contains(&"test_mixed".to_string()), "test_mixed should be live (entry point)");
+    assert!(!dead_names.contains(&"test_gamma_unused".to_string()), "test_gamma_unused should be live (entry point)");
+
+    // unused_util never imported
+    assert!(dead_names.contains(&"unused_util".to_string()), "unused_util should be dead");
+
+    // Note: util_gamma is imported but may not be marked as dead due to conservative approach
+    // This is acceptable - imported functions are treated conservatively
+}
+
+#[test]
+fn test_diamond_dependency_pattern() {
+    // Scenario: Diamond dependency - common library shared by two packages
+    //
+    //     app
+    //    /   \
+    //   b1   b2
+    //    \   /
+    //    common
+
+    let mut analyzer = CallGraphAnalyzer::new();
+
+    let common_code = r#"
+def shared_utility():
+    """Shared utility used by both b1 and b2"""
+    return "shared"
+
+def unused_common():
+    """Never called"""
+    return "dead"
+"#;
+
+    let b1_code = r#"
+from common import shared_utility
+
+def b1_function():
+    """Function in b1"""
+    return shared_utility()
+
+def unused_b1():
+    """Never called"""
+    return "dead"
+"#;
+
+    let b2_code = r#"
+from common import shared_utility
+
+def b2_function():
+    """Function in b2"""
+    return shared_utility()
+
+def unused_b2():
+    """Never called"""
+    return "dead"
+"#;
+
+    let app_code = r#"
+from b1 import b1_function
+from b2 import b2_function
+
+def test_diamond():
+    """Entry point"""
+    b1_function()
+    b2_function()
+"#;
+
+    analyzer.analyze_source("common", common_code).expect("Failed to analyze common");
+    analyzer.analyze_source("b1", b1_code).expect("Failed to analyze b1");
+    analyzer.analyze_source("b2", b2_code).expect("Failed to analyze b2");
+    analyzer.analyze_source("app", app_code).expect("Failed to analyze app");
+
+    // Register imports
+    analyzer.add_import("b1".to_string(), "shared_utility".to_string(),
+                       "common".to_string(), "shared_utility".to_string());
+    analyzer.add_import("b2".to_string(), "shared_utility".to_string(),
+                       "common".to_string(), "shared_utility".to_string());
+    analyzer.add_import("app".to_string(), "b1_function".to_string(),
+                       "b1".to_string(), "b1_function".to_string());
+    analyzer.add_import("app".to_string(), "b2_function".to_string(),
+                       "b2".to_string(), "b2_function".to_string());
+
+    let dead_code = analyzer.find_dead_code();
+    let dead_names: Vec<String> = dead_code.iter().map(|(_, name)| name.clone()).collect();
+
+    // Verify dead code
+    assert!(dead_names.contains(&"unused_common".to_string()), "unused_common should be dead");
+    assert!(dead_names.contains(&"unused_b1".to_string()), "unused_b1 should be dead");
+    assert!(dead_names.contains(&"unused_b2".to_string()), "unused_b2 should be dead");
+
+    // Verify live functions
+    assert!(!dead_names.contains(&"test_diamond".to_string()), "test_diamond should be live (entry point)");
+    assert!(!dead_names.contains(&"b1_function".to_string()), "b1_function should be live (called from app)");
+    assert!(!dead_names.contains(&"b2_function".to_string()), "b2_function should be live (called from app)");
+    assert!(!dead_names.contains(&"shared_utility".to_string()), "shared_utility should be live (called from b1 and b2)");
+}
+
+#[test]
+fn test_exported_functions_with_exports() {
+    // Scenario: Test that exported functions are protected from being marked dead
+    // even if they're not called internally
+
+    let mut analyzer = CallGraphAnalyzer::new();
+
+    let library_code = r#"
+__all__ = ['public_api', 'exported_helper']
+
+def public_api():
+    """Public API function"""
+    return "public"
+
+def exported_helper():
+    """Exported but not used internally"""
+    return "helper"
+
+def internal_only():
+    """Internal function"""
+    return "internal"
+
+def unused_function():
+    """Not exported and not used"""
+    return "dead"
+
+def test_library():
+    """Test function"""
+    return internal_only()
+"#;
+
+    analyzer.analyze_source("library", library_code).expect("Failed to analyze library");
+
+    let dead_code = analyzer.find_dead_code();
+    let dead_names: Vec<String> = dead_code.iter().map(|(_, name)| name.clone()).collect();
+
+    // Verify export protection
+    assert!(!dead_names.contains(&"public_api".to_string()), "public_api should be protected (in __all__)");
+    assert!(!dead_names.contains(&"exported_helper".to_string()), "exported_helper should be protected (in __all__)");
+
+    // Verify dead code detection for non-exported
+    assert!(dead_names.contains(&"unused_function".to_string()), "unused_function should be dead");
+    // test_library is an entry point, internal_only is called from it
+    assert!(!dead_names.contains(&"internal_only".to_string()), "internal_only should be live (called from test_library)");
+}
+
+#[test]
+fn test_multiple_test_entry_points() {
+    // Scenario: Package with multiple test functions as entry points
+    // Each tests a different code path
+
+    let mut analyzer = CallGraphAnalyzer::new();
+
+    let code = r#"
+def setup():
+    """Setup function"""
+    return {}
+
+def feature_a():
+    """Feature A"""
+    return "a"
+
+def feature_b():
+    """Feature B"""
+    return "b"
+
+def shared_helper():
+    """Used by both features"""
+    return "shared"
+
+def unused_feature():
+    """Never used"""
+    return "dead"
+
+def test_feature_a():
+    """Test entry point A"""
+    setup()
+    shared_helper()
+    return feature_a()
+
+def test_feature_b():
+    """Test entry point B"""
+    setup()
+    shared_helper()
+    return feature_b()
+
+def test_unused():
+    """Another test entry point"""
+    pass
+"#;
+
+    analyzer.analyze_source("module", code).expect("Failed to analyze module");
+
+    let dead_code = analyzer.find_dead_code();
+    let dead_names: Vec<String> = dead_code.iter().map(|(_, name)| name.clone()).collect();
+
+    // Entry points
+    assert!(!dead_names.contains(&"test_feature_a".to_string()), "test_feature_a should be live (entry point)");
+    assert!(!dead_names.contains(&"test_feature_b".to_string()), "test_feature_b should be live (entry point)");
+    assert!(!dead_names.contains(&"test_unused".to_string()), "test_unused should be live (entry point)");
+
+    // Called from entry points
+    assert!(!dead_names.contains(&"setup".to_string()), "setup should be live (called from test_feature_a and test_feature_b)");
+    assert!(!dead_names.contains(&"shared_helper".to_string()), "shared_helper should be live");
+    assert!(!dead_names.contains(&"feature_a".to_string()), "feature_a should be live (called from test_feature_a)");
+    assert!(!dead_names.contains(&"feature_b".to_string()), "feature_b should be live (called from test_feature_b)");
+
+    // Dead code
+    assert!(dead_names.contains(&"unused_feature".to_string()), "unused_feature should be dead");
+}
+
+#[test]
+fn test_large_dependency_graph() {
+    // Scenario: Larger graph with multiple packages and complex interdependencies
+    // Tests scalability of the dead code detection
+
+    let mut analyzer = CallGraphAnalyzer::new();
+
+    // Package: core - provides foundational operations
+    let core_code = r#"
+def parse_input(data):
+    return {"parsed": data}
+
+def format_output(result):
+    return str(result)
+
+def unused_core_fn():
+    return "dead"
+"#;
+
+    // Package: processing - depends on core
+    let processing_code = r#"
+from core import parse_input, format_output
+
+def preprocess(data):
+    parsed = parse_input(data)
+    return processed
+
+def unused_processing_fn():
+    return "dead"
+
+def test_processing():
+    return preprocess("test")
+"#;
+
+    // Package: output - depends on core
+    let output_code = r#"
+from core import format_output
+
+def render(data):
+    return format_output(data)
+
+def unused_output_fn():
+    return "dead"
+
+def test_output():
+    return render("test")
+"#;
+
+    // Package: orchestrator - depends on processing and output
+    let orchestrator_code = r#"
+from processing import preprocess
+from output import render
+
+def pipeline(input_data):
+    processed = preprocess(input_data)
+    result = render(processed)
+    return result
+
+def unused_orchestrator_fn():
+    return "dead"
+
+def test_pipeline():
+    return pipeline("data")
+"#;
+
+    analyzer.analyze_source("core", core_code).expect("Failed to analyze core");
+    analyzer.analyze_source("processing", processing_code).expect("Failed to analyze processing");
+    analyzer.analyze_source("output", output_code).expect("Failed to analyze output");
+    analyzer.analyze_source("orchestrator", orchestrator_code).expect("Failed to analyze orchestrator");
+
+    // Register imports
+    analyzer.add_import("processing".to_string(), "parse_input".to_string(),
+                       "core".to_string(), "parse_input".to_string());
+    analyzer.add_import("processing".to_string(), "format_output".to_string(),
+                       "core".to_string(), "format_output".to_string());
+    analyzer.add_import("output".to_string(), "format_output".to_string(),
+                       "core".to_string(), "format_output".to_string());
+    analyzer.add_import("orchestrator".to_string(), "preprocess".to_string(),
+                       "processing".to_string(), "preprocess".to_string());
+    analyzer.add_import("orchestrator".to_string(), "render".to_string(),
+                       "output".to_string(), "render".to_string());
+
+    let dead_code = analyzer.find_dead_code();
+    let dead_names: Vec<String> = dead_code.iter().map(|(_, name)| name.clone()).collect();
+
+    // Verify all dead functions detected
+    assert!(dead_names.contains(&"unused_core_fn".to_string()), "unused_core_fn should be dead");
+    assert!(dead_names.contains(&"unused_processing_fn".to_string()), "unused_processing_fn should be dead");
+    assert!(dead_names.contains(&"unused_output_fn".to_string()), "unused_output_fn should be dead");
+    assert!(dead_names.contains(&"unused_orchestrator_fn".to_string()), "unused_orchestrator_fn should be dead");
+
+    // Verify key functions are live
+    assert!(!dead_names.contains(&"pipeline".to_string()), "pipeline should be live");
+    assert!(!dead_names.contains(&"preprocess".to_string()), "preprocess should be live");
+    assert!(!dead_names.contains(&"render".to_string()), "render should be live");
+}
