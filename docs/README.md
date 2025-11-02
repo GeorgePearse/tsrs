@@ -100,6 +100,14 @@ Add `--stats` to include per-file rename counts in the output, and combine it wi
 ./target/debug/tsrs-cli minify-dir ./src --dry-run --fail-on-change --fail-on-bailout
 ```
 
+## Application Guides
+
+**New to tsrs?** Start with one of these guides to understand what you can do:
+
+- **[Minification Guide](MINIFICATION_GUIDE.md)** - Reduce code size by renaming local variables. Perfect for Lambda, Docker, and size-constrained deployments.
+- **[Test Selection Guide](TEST_SELECTION_GUIDE.md)** - Run only tests affected by code changes. Speed up CI/CD pipelines by 30-80%.
+- **[Applications Overview](APPLICATIONS.md)** - Explore all possible uses of the analysis framework (dead code detection, package slimming, and more).
+
 ## References
 
 - [pyminifier (liftoffsoftware)](https://github.com/liftoff/pyminifier)

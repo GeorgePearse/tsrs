@@ -24,6 +24,10 @@ plugins:
 
 nav:
   - Home: README.md
+  - Applications:
+    - Overview: APPLICATIONS.md
+    - Minification Guide: MINIFICATION_GUIDE.md
+    - Test Selection Guide: TEST_SELECTION_GUIDE.md
   - Getting Started:
     - Contributing: CONTRIBUTING.md
     - Testing: TESTING.md
@@ -32,7 +36,7 @@ nav:
     - Implementation Guide: IMPLEMENTATION_GUIDE.md
     - Minification Design: MINIFY_DESIGN.md
     - Test Repositories: TEST_REPOS_SUMMARY.md
-    - Applications & Use Cases: APPLICATIONS.md
+    - Cross-Package Analysis: CROSS_PACKAGE_ANALYSIS.md
   - Architecture & Design:
     - Architecture Guide: AGENTS.md
     - Alternative Approaches: ALTERNATIVE_APPROACHES.md
