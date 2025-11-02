@@ -428,13 +428,47 @@ fn process_pixels(data: Vec<u8>) -> Vec<u8> {
 
 ---
 
-## Recommended Reading
+## Related Tools & Complementary Approaches
 
+### Dead Code Detection
+- **vulture**: Single-package dead code finder with conservative approach
+  - Similar goal to tsrs but limited to per-package analysis
+  - No cross-package import tracking
+  - https://github.com/jendrikseipp/vulture
+
+### Test Impact Analysis (Inverse of tsrs)
+- **pytest-testmon**: Runtime-based test selection
+  - Tracks which code each test executes
+  - Recommends tests to run based on code changes
+  - **tsrs Inversion**: Use static analysis instead of runtime tracking for test impact
+  - https://github.com/tarpas/pytest-testmon
+
+### Code Quality & Analysis
+- **Coverage.py**: Line coverage measurement
+  - Can be combined with tsrs for comprehensive reachability analysis
+  - https://coverage.readthedocs.io
+
+- **Hypothesis**: Property-based testing framework
+  - Could use tsrs to identify uncovered code for test generation
+  - https://hypothesis.readthedocs.io
+
+### Performance Optimization
 - **Rust/Python Interop**: https://pyo3.rs/v0.20.0/
 - **Type Optimization**: https://github.com/numba/numba (JIT compiler for numerical code)
+- **PyPy** (alternative Python interpreter with JIT): https://www.pypy.org/
+
+### Code Transformation
 - **Bytecode Obfuscation**: https://github.com/Taiga74164/python-bytecode-obfuscator
 - **Nuitka** (Python compiler to C++): https://nuitka.net/
-- **PyPy** (alternative Python interpreter with JIT): https://www.pypy.org/
+
+---
+
+## Recommended Reading
+
+- **Python AST Analysis**: https://docs.python.org/3/library/ast.html
+- **rustpython-parser**: https://github.com/RustPython/Parser
+- **pytest Fixtures & Dependencies**: https://docs.pytest.org/en/stable/fixture.html
+- **Call Graph Analysis**: https://en.wikipedia.org/wiki/Call_graph
 
 ---
 

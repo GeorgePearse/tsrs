@@ -32,6 +32,7 @@ nav:
     - Implementation Guide: IMPLEMENTATION_GUIDE.md
     - Minification Design: MINIFY_DESIGN.md
     - Test Repositories: TEST_REPOS_SUMMARY.md
+    - Applications & Use Cases: APPLICATIONS.md
   - Architecture & Design:
     - Architecture Guide: AGENTS.md
     - Alternative Approaches: ALTERNATIVE_APPROACHES.md
