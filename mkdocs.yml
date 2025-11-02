@@ -28,6 +28,7 @@ nav:
     - Overview: APPLICATIONS.md
     - Minification Guide: MINIFICATION_GUIDE.md
     - Test Selection Guide: TEST_SELECTION_GUIDE.md
+    - AI Transpilation Guide: TRANSPILE_AI_GUIDE.md
   - Getting Started:
     - Contributing: CONTRIBUTING.md
     - Testing: TESTING.md
